@@ -1,0 +1,164 @@
+qlib_init:
+  provider_uri: "/root/.qlib/qlib_data/us_data"
+  region: us
+  exp_manager:
+    class: MLflowExpManager
+    module_path: qlib.workflow.expm
+    kwargs:
+      uri: "/workspace/qlib/mlruns"
+      default_exp_name: "us_sharadar_weekly_pit_v4_weighted"
+
+market: &market pit_mrq_large
+benchmark: &benchmark AAPL
+
+data_handler_config: &data_handler_config
+  start_time: 2000-01-01
+  end_time: 2026-01-30
+  fit_start_time: 2000-01-01
+  fit_end_time: 2018-12-31
+  instruments: *market
+  freq: day
+  infer_processors:
+    - class: CSZScoreNorm
+      kwargs:
+        fields_group: feature
+        method: robust
+  learn_processors:
+    - class: DropnaLabel
+    - class: CSRankNorm
+      kwargs:
+        fields_group: label
+    - class: CSZScoreNorm
+      kwargs:
+        fields_group: feature
+        method: robust
+  # tighter quality filters: price > $10 and 20d avg dollar volume > $20M
+  filter_pipe:
+    - filter_type: ExpressionDFilter
+      rule_expression: "$close > 10"
+      filter_start_time: 2000-01-01
+      filter_end_time: 2026-01-30
+      keep: false
+    - filter_type: ExpressionDFilter
+      rule_expression: "Mean($close * $volume, 20) > 20000000"
+      filter_start_time: 2000-01-01
+      filter_end_time: 2026-01-30
+      keep: false
+  # weekly label: next 10 trading days return
+  label:
+    - ["Ref($close, -11)/Ref($close, -1) - 1"]
+    - ["LABEL0"]
+  pit_fields:
+    - assets
+    - liabilities
+    - equity
+    - revenue
+    - netinc
+    - ebit
+    - ebitda
+    - cashneq
+    - debt
+    - fcf
+    - capex
+    - workingcapital
+    - currentratio
+    - grossmargin
+    - netmargin
+    - eps
+    - epsdil
+    - bvps
+    - shareswa
+    - shareswadil
+    - divyield
+    - dps
+  extra_fields:
+    - "P($$netinc_q) / (P($$equity_q) + 1e-12)"
+    - "P($$netinc_q) / (P($$assets_q) + 1e-12)"
+    - "P($$ebitda_q) / (P($$revenue_q) + 1e-12)"
+    - "P($$fcf_q) / (P($$revenue_q) + 1e-12)"
+    - "P($$debt_q) / (P($$assets_q) + 1e-12)"
+    - "P($$cashneq_q) / (P($$assets_q) + 1e-12)"
+    - "P($$capex_q) / (P($$assets_q) + 1e-12)"
+    - "P($$revenue_q) / (P($$assets_q) + 1e-12)"
+    - "P($$dps_q) / ($close + 1e-12)"
+    - "P($$eps_q) / ($close + 1e-12)"
+    - "P($$bvps_q) / ($close + 1e-12)"
+    - "P($$fcf_q) / (P($$shareswa_q) + 1e-12) / ($close + 1e-12)"
+    - "P($$workingcapital_q) / (P($$assets_q) + 1e-12)"
+  extra_names:
+    - "ROE_Q"
+    - "ROA_Q"
+    - "EBITDA_MARGIN_Q"
+    - "FCF_MARGIN_Q"
+    - "LEVERAGE_Q"
+    - "CASH_ASSETS_Q"
+    - "CAPEX_ASSETS_Q"
+    - "ASSET_TURN_Q"
+    - "DIV_YIELD_PX_Q"
+    - "EARN_YIELD_Q"
+    - "BOOK_PX_Q"
+    - "FCF_YIELD_Q"
+    - "WC_ASSETS_Q"
+  pit_interval: q
+
+port_analysis_config: &port_analysis_config
+  strategy:
+    class: WeeklyScoreWeightedStrategy
+    module_path: qlib.contrib.strategy
+    kwargs:
+      topk: 50
+      signal: <PRED>
+      rebalance_weekday: 0
+      weighting: rank
+      max_weight: 0.05
+      liquidity_window: 20
+      min_avg_dollar_vol: 20000000
+      liquidity_buffer: 3
+      vol_window: 60
+      vol_scale: true
+  backtest:
+    start_time: 2022-01-01
+    end_time: 2026-01-30
+    account: 10000000
+    benchmark: *benchmark
+    exchange_kwargs:
+      limit_threshold: null
+      deal_price: close
+      open_cost: 0.0005
+      close_cost: 0.0015
+      min_cost: 5
+
+task:
+  model:
+    class: LGBModel
+    module_path: qlib.contrib.model.gbdt
+    kwargs:
+      loss: mse
+      colsample_bytree: 0.8879
+      learning_rate: 0.0421
+      subsample: 0.8789
+      lambda_l1: 205.6999
+      lambda_l2: 580.9768
+      max_depth: 8
+      num_leaves: 210
+      num_threads: 20
+  dataset:
+    class: DatasetH
+    module_path: qlib.data.dataset
+    kwargs:
+      handler:
+        class: Alpha158WithPIT
+        module_path: qlib.contrib.data.handler_sharadar
+        kwargs: *data_handler_config
+      segments:
+        train: [2000-01-01, 2018-12-31]
+        valid: [2019-01-01, 2021-12-31]
+        test: [2022-01-01, 2026-01-30]
+  record:
+    - class: SignalRecord
+      module_path: qlib.workflow.record_temp
+      kwargs: {}
+    - class: PortAnaRecord
+      module_path: qlib.workflow.record_temp
+      kwargs:
+        config: *port_analysis_config

@@ -1,0 +1,38 @@
+# --- SYSTEM & PYTHON JUNK ---
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store
+.env
+.venv/
+celery.log
+
+# --- ROOT LEVEL HEAVY DATA ---
+Uploads/
+uploads/
+results/
+mlruns/
+models/
+workspace/
+*.pkl
+*.zip
+SHARADAR_*.csv
+SHARADAR_*.zip
+
+# --- GLOBAL MODEL FILES (Ignores .pt everywhere) ---
+*.pt
+*.pth
+*.safetensors
+*.onnx
+*.bin
+*.ckpt
+*.mp4
+*.avi
+*.mov
+
+
+# --- SPECIFIC IGNORES FOR 'your_scripts' ---
+your_scripts/checkpoints/
+your_scripts/result/
+your_scripts/training videos/
+your_scripts/*.run

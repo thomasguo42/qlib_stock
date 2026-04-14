@@ -1,0 +1,128 @@
+provider_uri: /root/.qlib/qlib_data/us_data
+benchmark_pkl: /root/.qlib/qlib_data/us_data/bench_etf_basket.pkl
+start: 2022-01-01
+end: 2026-01-30
+stress_cost_mult: 2.0
+stress_deal_price: close
+gates:
+  min_full_excess_ann: 0.03
+  min_full_ir: 0.40
+  max_full_mdd_abs: 0.35
+  min_stress_excess_ann: 0.01
+  max_turnover: 0.10
+  min_positive_excess_years: 3
+  min_worst_year_excess_ann: -0.20
+  min_year_days: 200
+
+rolling:
+  enabled: false
+
+provenance:
+  require_unique_pred: false
+  reject_dirty_run: false
+  require_config_match: true
+
+candidates:
+  - name: baseline_uplus_stable
+    config: examples/benchmarks/LightGBM/workflow_config_lightgbm_Alpha158_us_sharadar_weekly_pit_best_v2_hold10_risk_v2_excess_stability_cor_events_full_uplus_stable.yaml
+    pred: mlruns/907430387469519321/248d0bb3bbf94625b13a257d55f78c44/artifacts/pred.pkl
+
+  - name: dd_guard_v1
+    config: examples/benchmarks/LightGBM/workflow_config_lightgbm_Alpha158_us_sharadar_weekly_pit_best_v2_hold10_risk_v2_excess_stability_cor_events_full_uplus_stable.yaml
+    pred: mlruns/907430387469519321/248d0bb3bbf94625b13a257d55f78c44/artifacts/pred.pkl
+    strategy_overrides:
+      risk_target_ann: 0.16
+      risk_floor: 0.10
+      risk_ceiling: 0.80
+      drawdown_limit: 0.06
+      drawdown_penalty: 0.40
+      market_drawdown_limit: 0.08
+      market_drawdown_penalty: 0.60
+      market_trend_penalty: 0.70
+      max_risk_step_down: 0.22
+
+  - name: dd_guard_v2
+    config: examples/benchmarks/LightGBM/workflow_config_lightgbm_Alpha158_us_sharadar_weekly_pit_best_v2_hold10_risk_v2_excess_stability_cor_events_full_uplus_stable.yaml
+    pred: mlruns/907430387469519321/248d0bb3bbf94625b13a257d55f78c44/artifacts/pred.pkl
+    strategy_overrides:
+      risk_target_ann: 0.14
+      risk_floor: 0.08
+      risk_ceiling: 0.75
+      drawdown_limit: 0.05
+      drawdown_penalty: 0.35
+      market_drawdown_limit: 0.07
+      market_drawdown_penalty: 0.55
+      market_trend_penalty: 0.65
+      market_trend_boost: 1.10
+      max_risk_step_down: 0.25
+      max_risk_step_up: 0.06
+
+  - name: crash_guard_v1
+    config: examples/benchmarks/LightGBM/workflow_config_lightgbm_Alpha158_us_sharadar_weekly_pit_best_v2_hold10_risk_v2_excess_stability_cor_events_full_uplus_stable.yaml
+    pred: mlruns/907430387469519321/248d0bb3bbf94625b13a257d55f78c44/artifacts/pred.pkl
+    strategy_overrides:
+      crash_guard: true
+      crash_drawdown_limit: 0.10
+      crash_return_lookback: 5
+      crash_return_limit: 0.05
+      crash_penalty: 0.35
+      crash_cooldown_steps: 4
+      drawdown_limit: 0.07
+      drawdown_penalty: 0.45
+      market_drawdown_limit: 0.09
+      market_drawdown_penalty: 0.65
+
+  - name: topk40_dd
+    config: examples/benchmarks/LightGBM/workflow_config_lightgbm_Alpha158_us_sharadar_weekly_pit_best_v2_hold10_risk_v2_excess_stability_cor_events_full_uplus_stable.yaml
+    pred: mlruns/907430387469519321/248d0bb3bbf94625b13a257d55f78c44/artifacts/pred.pkl
+    strategy_overrides:
+      topk: 40
+      n_drop: 8
+      candidate_buffer: 3
+      risk_target_ann: 0.17
+      risk_floor: 0.10
+      risk_ceiling: 0.85
+      drawdown_limit: 0.06
+      drawdown_penalty: 0.40
+      market_drawdown_limit: 0.08
+      market_drawdown_penalty: 0.60
+
+  - name: topk30_dd
+    config: examples/benchmarks/LightGBM/workflow_config_lightgbm_Alpha158_us_sharadar_weekly_pit_best_v2_hold10_risk_v2_excess_stability_cor_events_full_uplus_stable.yaml
+    pred: mlruns/907430387469519321/248d0bb3bbf94625b13a257d55f78c44/artifacts/pred.pkl
+    strategy_overrides:
+      topk: 30
+      n_drop: 6
+      candidate_buffer: 3
+      risk_target_ann: 0.18
+      risk_floor: 0.10
+      risk_ceiling: 0.90
+      drawdown_limit: 0.06
+      drawdown_penalty: 0.40
+      market_drawdown_limit: 0.08
+      market_drawdown_penalty: 0.60
+
+  - name: fixed_risk70_topk40
+    config: examples/benchmarks/LightGBM/workflow_config_lightgbm_Alpha158_us_sharadar_weekly_pit_best_v2_hold10_risk_v2_excess_stability_cor_events_full_uplus_stable.yaml
+    pred: mlruns/907430387469519321/248d0bb3bbf94625b13a257d55f78c44/artifacts/pred.pkl
+    strategy_overrides:
+      dynamic_risk: false
+      risk_degree: 0.70
+      topk: 40
+      n_drop: 8
+      hold_thresh: 10
+
+  - name: hold7_topk40
+    config: examples/benchmarks/LightGBM/workflow_config_lightgbm_Alpha158_us_sharadar_weekly_pit_best_v2_hold10_risk_v2_excess_stability_cor_events_full_uplus_stable.yaml
+    pred: mlruns/907430387469519321/248d0bb3bbf94625b13a257d55f78c44/artifacts/pred.pkl
+    strategy_overrides:
+      topk: 40
+      n_drop: 8
+      hold_thresh: 7
+      risk_target_ann: 0.17
+      risk_floor: 0.10
+      risk_ceiling: 0.85
+      drawdown_limit: 0.06
+      drawdown_penalty: 0.40
+      market_drawdown_limit: 0.08
+      market_drawdown_penalty: 0.60

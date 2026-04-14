@@ -1,0 +1,48 @@
+provider_uri: /root/.qlib/qlib_data/us_data
+benchmark_pkl: /root/.qlib/qlib_data/us_data/bench_etf_basket.pkl
+start: 2022-01-01
+end: 2026-01-30
+stress_cost_mult: 2.0
+stress_deal_price: close
+gates:
+  min_full_excess_ann: 0.02
+  min_full_ir: 0.40
+  max_full_mdd_abs: 0.35
+  min_stress_excess_ann: 0.01
+  max_turnover: 0.10
+  min_positive_excess_years: 3
+  min_worst_year_excess_ann: -0.20
+  min_year_days: 200
+
+rolling:
+  enabled: true
+  window_days: 504
+  step_days: 252
+  min_days: 252
+  min_excess_ann: 0.0
+  min_ir: 0.0
+  max_mdd_abs: 0.35
+  max_turnover: 0.10
+  min_pass_rate: 0.80
+
+provenance:
+  require_unique_pred: true
+  reject_dirty_run: true
+  require_config_match: true
+
+candidates:
+  - name: v2
+    config: examples/benchmarks/LightGBM/workflow_config_lightgbm_Alpha158_us_sharadar_weekly_pit_best_v2.yaml
+    pred: mlruns/907430387469519321/d00d2865e3994cc795586ed0b89fd6ff/artifacts/pred.pkl
+  - name: v2_hold10
+    config: examples/benchmarks/LightGBM/workflow_config_lightgbm_Alpha158_us_sharadar_weekly_pit_best_v2_hold10.yaml
+    pred: mlruns/907430387469519321/d00d2865e3994cc795586ed0b89fd6ff/artifacts/pred.pkl
+  - name: v2_hold10_risk
+    config: examples/benchmarks/LightGBM/workflow_config_lightgbm_Alpha158_us_sharadar_weekly_pit_best_v2_hold10_risk.yaml
+    pred: mlruns/907430387469519321/d00d2865e3994cc795586ed0b89fd6ff/artifacts/pred.pkl
+  - name: v2_hold10_risk_v2
+    config: examples/benchmarks/LightGBM/workflow_config_lightgbm_Alpha158_us_sharadar_weekly_pit_best_v2_hold10_risk_v2.yaml
+    pred: mlruns/907430387469519321/d00d2865e3994cc795586ed0b89fd6ff/artifacts/pred.pkl
+  - name: v2_hold10_risk_v3
+    config: examples/benchmarks/LightGBM/workflow_config_lightgbm_Alpha158_us_sharadar_weekly_pit_best_v2_hold10_risk_v3.yaml
+    pred: mlruns/907430387469519321/d00d2865e3994cc795586ed0b89fd6ff/artifacts/pred.pkl

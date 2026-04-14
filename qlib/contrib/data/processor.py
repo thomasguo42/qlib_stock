@@ -1,4 +1,8 @@
+from pathlib import Path
+from typing import Optional
+
 import numpy as np
+import pandas as pd
 
 from ...log import TimeInspector
 from ...data.dataset.processor import Processor, get_group_columns
@@ -126,4 +130,110 @@ class ConfigSectionProcessor(Processor):
 
         TimeInspector.log_cost_time("Finished preprocessing data.")
 
+        return df
+
+
+class BenchmarkExcessLabel(Processor):
+    """
+    Convert raw forward return labels into benchmark-relative excess labels.
+
+    This processor is intended for `learn_processors` only.
+    It subtracts the benchmark forward return over the same label horizon.
+    """
+
+    def __init__(
+        self,
+        benchmark_pkl: str,
+        label_horizon_days: int = 10,
+        label_ref_start_days: int = 1,
+        fields_group: str = "label",
+        benchmark_kind: str = "auto",
+        fill_method: Optional[str] = "ffill",
+        drop_missing: bool = True,
+    ):
+        self.benchmark_pkl = str(benchmark_pkl)
+        self.label_horizon_days = max(1, int(label_horizon_days))
+        self.label_ref_start_days = max(0, int(label_ref_start_days))
+        self.fields_group = fields_group
+        self.benchmark_kind = str(benchmark_kind).lower()
+        self.fill_method = fill_method
+        self.drop_missing = bool(drop_missing)
+        self._bench_forward = self._load_benchmark_forward()
+
+    def _load_benchmark_forward(self) -> pd.Series:
+        path = Path(self.benchmark_pkl).expanduser().resolve()
+        bench = pd.read_pickle(path)
+        if isinstance(bench, pd.DataFrame):
+            if bench.shape[1] != 1:
+                raise ValueError(f"benchmark_pkl must be Series or single-column DataFrame: {path}")
+            bench = bench.iloc[:, 0]
+        if not isinstance(bench, pd.Series):
+            raise ValueError(f"benchmark_pkl must be pandas Series: {path}")
+        bench = bench.copy()
+        bench.index = pd.DatetimeIndex(bench.index)
+        bench = bench.sort_index()
+        bench = bench[~bench.index.duplicated(keep="last")]
+
+        if self.benchmark_kind not in {"auto", "return", "price"}:
+            raise ValueError(f"unsupported benchmark_kind: {self.benchmark_kind}")
+        if self.benchmark_kind == "return":
+            ret = bench.astype(float)
+        elif self.benchmark_kind == "price":
+            ret = bench.astype(float).pct_change()
+        else:
+            # Auto detect: if values are mostly in [-1, 1], treat as returns; otherwise prices.
+            sample = bench.dropna().head(5000).astype(float)
+            as_return = True if sample.empty else bool((sample.abs() <= 1.0).mean() >= 0.98)
+            ret = bench.astype(float) if as_return else bench.astype(float).pct_change()
+
+        ret = ret.replace([np.inf, -np.inf], np.nan)
+        if self.fill_method == "ffill":
+            ret = ret.ffill()
+        elif self.fill_method == "bfill":
+            ret = ret.bfill()
+        elif self.fill_method is not None:
+            ret = ret.fillna(method=self.fill_method)
+
+        # Forward cumulative return aligned with qlib label style:
+        # Ref($close, -(s + N))/Ref($close, -s) - 1
+        # where s is label_ref_start_days and N is label_horizon_days.
+        gross = 1.0 + ret
+        cp = gross.cumprod()
+        start = self.label_ref_start_days
+        fwd = cp.shift(-(start + self.label_horizon_days)) / cp.shift(-start) - 1.0
+        return fwd
+
+    def is_for_infer(self) -> bool:
+        return False
+
+    def __call__(self, df: pd.DataFrame):
+        cols = get_group_columns(df, self.fields_group)
+        if len(cols) == 0:
+            return df
+        if not isinstance(df.index, pd.MultiIndex) or "datetime" not in df.index.names:
+            raise ValueError("BenchmarkExcessLabel expects MultiIndex with `datetime` level")
+
+        dts = pd.DatetimeIndex(df.index.get_level_values("datetime"))
+        bench_vals = self._bench_forward.reindex(dts)
+        if self.fill_method == "ffill":
+            bench_vals = bench_vals.ffill()
+        elif self.fill_method == "bfill":
+            bench_vals = bench_vals.bfill()
+        elif self.fill_method is not None:
+            bench_vals = bench_vals.fillna(method=self.fill_method)
+
+        if self.drop_missing:
+            valid = ~bench_vals.isna().to_numpy()
+            if not valid.all():
+                df = df.loc[valid].copy()
+                bench_vals = bench_vals[valid]
+
+        target = df.loc[:, cols].sub(bench_vals.to_numpy(), axis=0)
+        # Preserve original label dtypes (often float32) to avoid pandas
+        # incompatible-assignment warnings on future versions.
+        try:
+            target = target.astype(df.loc[:, cols].dtypes.to_dict())
+        except Exception:
+            pass
+        df.loc[:, cols] = target
         return df

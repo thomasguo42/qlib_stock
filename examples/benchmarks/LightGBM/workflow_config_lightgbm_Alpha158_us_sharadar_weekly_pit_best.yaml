@@ -44,7 +44,7 @@ data_handler_config: &data_handler_config
       filter_start_time: 2000-01-01
       filter_end_time: 2026-01-30
       keep: false
-  # weekly label: next 5 trading days return
+  # weekly label: next 10 trading days return
   label:
     - ["Ref($close, -11)/Ref($close, -1) - 1"]
     - ["LABEL0"]

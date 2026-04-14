@@ -15,7 +15,12 @@ from .rule_strategy import (
 )
 
 from .cost_control import SoftTopkStrategy
-from .weekly import WeeklyTopkDropoutStrategy, WeeklyScoreWeightedStrategy
+from .weekly import (
+    WeeklyTopkDropoutStrategy,
+    WeeklyScoreWeightedStrategy,
+    RiskManagedTopkDropoutStrategy,
+    WeeklyRiskManagedTopkDropoutStrategy,
+)
 from .optimized import OptimizedTopkStrategy, WeeklyOptimizedTopkStrategy
 
 
@@ -29,6 +34,8 @@ __all__ = [
     "SoftTopkStrategy",
     "WeeklyTopkDropoutStrategy",
     "WeeklyScoreWeightedStrategy",
+    "RiskManagedTopkDropoutStrategy",
+    "WeeklyRiskManagedTopkDropoutStrategy",
     "OptimizedTopkStrategy",
     "WeeklyOptimizedTopkStrategy",
 ]

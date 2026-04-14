@@ -15,6 +15,7 @@ fi
 BASE="https://data.nasdaq.com/api/v3"
 OUT_DIR="./_sharadar_check"
 UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+MAP_FILE="${MAP_FILE:-./scripts/data_collector/sharadar/table_map_us_core_bundle.yaml}"
 mkdir -p "$OUT_DIR"
 
 need_cmd() {
@@ -69,6 +70,39 @@ else:
 PY
 }
 
+load_tables_from_map() {
+  local map_file="$1"
+  python - <<'PY' "$map_file"
+import sys
+from pathlib import Path
+try:
+    import yaml
+except Exception:
+    print("")
+    raise SystemExit(0)
+path = Path(sys.argv[1]).expanduser().resolve()
+if not path.exists():
+    print("")
+    raise SystemExit(0)
+cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+tables = []
+for item in cfg.get("tables", []) or []:
+    if isinstance(item, dict):
+        t = str(item.get("table", "")).strip().upper()
+        if t:
+            tables.append(t)
+print(",".join(sorted(set(tables))))
+PY
+}
+
+MAP_TABLES="$(load_tables_from_map "$MAP_FILE")"
+if [[ -n "$MAP_TABLES" ]]; then
+  IFS=',' read -r -a TABLES <<< "$MAP_TABLES"
+else
+  TABLES=(TICKERS SEP SF1 SFP)
+fi
+echo "==> Using table candidates: ${TABLES[*]}"
+
 # 1) Basic key verification using a small TICKERS query
 echo "==> Verifying API key using SHARADAR/TICKERS (AAPL)"
 status=$(curl_json "${BASE}/datatables/SHARADAR/TICKERS.json?api_key=${API_KEY}&ticker=AAPL" "${OUT_DIR}/tickers_aapl.json")
@@ -77,7 +111,7 @@ print_json_keys "${OUT_DIR}/tickers_aapl.json"
 
 # 2) Table metadata/schemas (try both possible metadata endpoints)
 # Note: If metadata endpoint fails, we still get columns from sample queries.
-for tbl in TICKERS SEP SF1 SFP; do
+for tbl in "${TABLES[@]}"; do
   echo "==> Fetching metadata for SHARADAR/${tbl}"
   status=$(curl_json "${BASE}/datatables/SHARADAR/${tbl}/metadata.json?api_key=${API_KEY}" "${OUT_DIR}/${tbl}_metadata.json")
   echo "HTTP $status (metadata)"
@@ -108,19 +142,20 @@ status=$(curl_json "${BASE}/datatables/SHARADAR/TICKERS.json?api_key=${API_KEY}&
 echo "HTTP $status"
 print_table_columns "${OUT_DIR}/tickers_aapl.json"
 
-# 4) Optional: insiders/institutional/funds data (bundle extras)
-# These tables names may differ by subscription; check via your docs if these fail.
-# Common guesses: SFP (fund prices). If you know the exact table names, add them here.
-for tbl in SFP; do
-  echo "==> Optional table sample for SHARADAR/${tbl}"
+# 4) Validate all candidate bundle tables from map
+for tbl in "${TABLES[@]}"; do
+  if [[ "$tbl" == "TICKERS" || "$tbl" == "SEP" || "$tbl" == "SF1" || "$tbl" == "SFP" ]]; then
+    continue
+  fi
+  echo "==> Extra table sample for SHARADAR/${tbl}"
   status=$(curl_json "${BASE}/datatables/SHARADAR/${tbl}.json?api_key=${API_KEY}&qopts.per_page=1" "${OUT_DIR}/${tbl}_sample1.json")
   echo "HTTP $status"
   print_table_columns "${OUT_DIR}/${tbl}_sample1.json"
   echo
- done
+done
 
 # 4b) Pull INDICATORS (official column definitions) for core tables
-echo "==> Fetching SHARADAR/INDICATORS for SEP, SF1, TICKERS, SFP"
+echo "==> Fetching SHARADAR/INDICATORS for core tables"
 status=$(curl_json "${BASE}/datatables/SHARADAR/INDICATORS.csv?api_key=${API_KEY}&table=SEP,SF1,TICKERS,SFP&qopts.export=true" "${OUT_DIR}/INDICATORS_SEP_SF1_TICKERS_SFP.csv")
 echo "HTTP $status (INDICATORS csv)"
 

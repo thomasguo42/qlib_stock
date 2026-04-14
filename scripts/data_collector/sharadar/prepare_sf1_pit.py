@@ -50,8 +50,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--dimension", default="MRQ", help="SF1 dimension to keep (e.g. MRQ, MRY)")
     parser.add_argument(
         "--date_col",
-        default="lastupdated",
-        help="Publication date column to use for PIT (e.g. lastupdated, datekey)",
+        default="datekey",
+        help="Publication date column to use for PIT (e.g. datekey, reportperiod, lastupdated)",
     )
     parser.add_argument(
         "--period_col",
@@ -68,12 +68,20 @@ def _parse_args() -> argparse.Namespace:
         default="",
         help="Comma-separated list of SF1 fields to drop.",
     )
+    parser.add_argument(
+        "--date_offset_days",
+        type=int,
+        default=45,
+        help="Offset in days to approximate filing delay (e.g. 45 for quarterly). Use 0 to disable.",
+    )
     parser.add_argument("--chunksize", type=int, default=200000)
     return parser.parse_args()
 
 
-def _as_int_date(series: pd.Series) -> pd.Series:
+def _as_int_date(series: pd.Series, offset_days: int = 0) -> pd.Series:
     dt = pd.to_datetime(series, errors="coerce")
+    if offset_days:
+        dt = dt + pd.to_timedelta(offset_days, unit="D")
     return (dt.dt.year * 10000 + dt.dt.month * 100 + dt.dt.day).astype("Int32")
 
 
@@ -126,7 +134,7 @@ def main() -> None:
             continue
 
         chunk = chunk.copy()
-        chunk["date"] = _as_int_date(chunk[args.date_col])
+        chunk["date"] = _as_int_date(chunk[args.date_col], offset_days=args.date_offset_days)
         chunk["period"] = _as_period_int(chunk[args.period_col])
         chunk = chunk.dropna(subset=["date", "period", "ticker"])
         if chunk.empty:

@@ -13,11 +13,23 @@ The calculation of both <period_time, feature> and <observe_time, feature> data 
 2) concatenate all th collasped data, we will get data with format <observe_time, feature>.
 Qlib will use the operator `P` to perform the collapse.
 """
+import os
+
 import numpy as np
 import pandas as pd
 from qlib.data.ops import ElemOperator
 from qlib.log import get_module_logger
 from .data import Cal
+
+
+def _is_truthy(value: str) -> bool:
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+_MISSING_PERIOD_WARNED = set()
+_SILENCE_MISSING_PERIOD_WARN = _is_truthy(os.environ.get("QLIB_PIT_SILENCE_MISSING"))
 
 
 class P(ElemOperator):
@@ -39,7 +51,11 @@ class P(ElemOperator):
                 s = self._load_feature(instrument, -start_ws, 0, cur_time)
                 resample_data[cur_index - start_index] = s.iloc[-1] if len(s) > 0 else np.nan
             except FileNotFoundError:
-                get_module_logger("base").warning(f"WARN: period data not found for {str(self)}")
+                if not _SILENCE_MISSING_PERIOD_WARN:
+                    expr_name = str(self)
+                    if expr_name not in _MISSING_PERIOD_WARNED:
+                        _MISSING_PERIOD_WARNED.add(expr_name)
+                        get_module_logger("base").warning(f"WARN: period data not found for {expr_name}")
                 return pd.Series(dtype="float32", name=str(self))
 
         resample_series = pd.Series(

@@ -1,0 +1,119 @@
+# Sharadar CORE US (COR bundle) table map for ingestion orchestration.
+# Verified against Nasdaq Data Link access on 2026-02-10.
+
+bundle: sharadar_core_us_cor
+version: 2026-02-10
+
+tables:
+  - name: security_master
+    product: core_us_fundamentals
+    table: TICKERS
+    mode: full
+    out_file: raw/tickers.csv
+    required: true
+    notes: Security master / universe construction.
+
+  - name: equity_prices
+    product: sharadar_equity_prices
+    table: SEP
+    mode: per_ticker
+    ticker_field: ticker
+    date_field: date
+    out_dir: raw/sep
+    required: true
+    notes: Equity OHLCV + adjusted/unadjusted price fields.
+
+  - name: fund_prices
+    product: sharadar_fund_prices
+    table: SFP
+    mode: per_ticker
+    ticker_field: ticker
+    date_field: date
+    out_dir: raw/sfp
+    required: true
+    notes: ETF/fund prices for market/regime features.
+
+  - name: fundamentals_mrq
+    product: core_us_fundamentals
+    table: SF1
+    mode: full
+    out_file: raw/sf1_MRQ.csv
+    filters: "dimension=MRQ"
+    required: true
+    notes: Quarterly PIT fundamentals.
+
+  - name: valuation_daily
+    product: core_us_fundamentals
+    table: DAILY
+    mode: per_ticker
+    ticker_field: ticker
+    date_field: date
+    out_dir: raw/daily
+    columns: "ticker,date,ev,evebit,evebitda,marketcap,pb,pe,ps,lastupdated"
+    required: false
+    notes: Daily valuation snapshot table.
+
+  - name: corporate_actions
+    product: core_us_fundamentals
+    table: ACTIONS
+    mode: per_ticker
+    ticker_field: ticker
+    date_field: date
+    out_dir: raw/actions
+    columns: "ticker,date,action,value,contraticker,contraname,name"
+    required: false
+    notes: Corporate action events by ticker.
+
+  - name: event_codes
+    product: core_us_fundamentals
+    table: EVENTS
+    mode: per_ticker
+    ticker_field: ticker
+    date_field: date
+    out_dir: raw/events
+    columns: "ticker,date,eventcodes"
+    required: false
+    notes: Event code stream used for event frequency features.
+
+  - name: insiders_sf2
+    product: core_us_insiders
+    table: SF2
+    mode: per_ticker
+    ticker_field: ticker
+    date_field: filingdate
+    out_dir: raw/sf2
+    columns: "ticker,filingdate,transactiondate,transactioncode,transactionshares,transactionvalue,transactionpricepershare,sharesownedbeforetransaction,sharesownedfollowingtransaction,isdirector,isofficer,istenpercentowner"
+    required: false
+    notes: Insider transactions (Form 3/4/5) with transaction fields.
+
+  - name: institutions_sf3
+    product: core_us_institutional_investors
+    table: SF3
+    mode: per_ticker
+    ticker_field: ticker
+    date_field: calendardate
+    out_dir: raw/sf3
+    filters: "securitytype=SHR"
+    columns: "ticker,calendardate,securitytype,value,units,price,investorname"
+    required: false
+    notes: 13F investor-position snapshots by ticker (very large; optional/slow).
+
+  - name: institutions_sf3a
+    product: core_us_institutional_investors
+    table: SF3A
+    mode: per_ticker
+    ticker_field: ticker
+    date_field: calendardate
+    out_dir: raw/sf3a
+    columns: "ticker,calendardate,shrholders,cllholders,putholders,wntholders,dbtholders,prfholders,fndholders,undholders,shrunits,cllunits,putunits,wntunits,dbtunits,prfunits,fndunits,undunits,shrvalue,cllvalue,putvalue,wntvalue,dbtvalue,prfvalue,fndvalue,undvalue,totalvalue,percentoftotal"
+    required: false
+    notes: Aggregated institutional exposure by security.
+
+  - name: institutions_sf3b
+    product: core_us_institutional_investors
+    table: SF3B
+    mode: full
+    out_file: raw/sf3b.csv
+    columns: "calendardate,investorname,shrholdings,cllholdings,putholdings,wntholdings,dbtholdings,prfholdings,fndholdings,undholdings,shrunits,cllunits,putunits,wntunits,dbtunits,prfunits,fndunits,undunits,shrvalue,cllvalue,putvalue,wntvalue,dbtvalue,prfvalue,fndvalue,undvalue,totalvalue,percentoftotal"
+    required: false
+    notes: Investor-level holdings aggregates (no ticker key).

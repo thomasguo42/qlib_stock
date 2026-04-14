@@ -1,0 +1,222 @@
+benchmark: AAPL
+data_handler_config: &id001
+  end_time: 2026-01-30
+  extra_fields:
+  - P($$netinc_q) / (P($$equity_q) + 1e-12)
+  - P($$netinc_q) / (P($$assets_q) + 1e-12)
+  - P($$ebitda_q) / (P($$revenue_q) + 1e-12)
+  - P($$fcf_q) / (P($$revenue_q) + 1e-12)
+  - P($$debt_q) / (P($$assets_q) + 1e-12)
+  - P($$cashneq_q) / (P($$assets_q) + 1e-12)
+  - P($$capex_q) / (P($$assets_q) + 1e-12)
+  - P($$revenue_q) / (P($$assets_q) + 1e-12)
+  - P($$dps_q) / ($close + 1e-12)
+  - P($$eps_q) / ($close + 1e-12)
+  - P($$bvps_q) / ($close + 1e-12)
+  - P($$fcf_q) / (P($$shareswa_q) + 1e-12) / ($close + 1e-12)
+  - If(IsNull(P($$assets_q)), 1, 0)
+  - If(IsNull(P($$revenue_q)), 1, 0)
+  - If(IsNull(P($$netinc_q)), 1, 0)
+  - If(IsNull(P($$equity_q)), 1, 0)
+  - If(IsNull(P($$debt_q)), 1, 0)
+  - If(IsNull(P($$cashneq_q)), 1, 0)
+  - If(IsNull(P($$fcf_q)), 1, 0)
+  - If(IsNull(P($$capex_q)), 1, 0)
+  - $insider_transactionshares_63d_sum
+  - $insider_transactionvalue_63d_sum
+  - $insider_count_63d_sum
+  - $insider_sharesownedfollowingtransaction_63d_mean
+  - If(IsNull($insider_transactionvalue_63d_sum), 1, 0)
+  extra_names:
+  - ROE_Q
+  - ROA_Q
+  - EBITDA_MARGIN_Q
+  - FCF_MARGIN_Q
+  - LEVERAGE_Q
+  - CASH_ASSETS_Q
+  - CAPEX_ASSETS_Q
+  - ASSET_TURN_Q
+  - DIV_YIELD_PX_Q
+  - EARN_YIELD_Q
+  - BOOK_PX_Q
+  - FCF_YIELD_Q
+  - MISSING_ASSETS_Q
+  - MISSING_REVENUE_Q
+  - MISSING_NETINC_Q
+  - MISSING_EQUITY_Q
+  - MISSING_DEBT_Q
+  - MISSING_CASHNEQ_Q
+  - MISSING_FCF_Q
+  - MISSING_CAPEX_Q
+  - INSIDER_SHARES_63D_SUM
+  - INSIDER_VALUE_63D_SUM
+  - INSIDER_COUNT_63D_SUM
+  - INSIDER_OWNED_FOLLOW_63D_MEAN
+  - MISSING_INSIDER_VALUE_63D_SUM
+  filter_pipe:
+  - filter_end_time: 2026-01-30
+    filter_start_time: 2016-01-01
+    filter_type: ExpressionDFilter
+    keep: false
+    rule_expression: $close > 5
+  - filter_end_time: 2026-01-30
+    filter_start_time: 2016-01-01
+    filter_type: ExpressionDFilter
+    keep: false
+    rule_expression: Mean($close * $volume, 20) > 10000000
+  fit_end_time: 2020-12-31
+  fit_start_time: 2016-01-01
+  freq: day
+  infer_processors:
+  - class: CSZScoreNorm
+    kwargs:
+      fields_group: feature
+      method: robust
+  instruments: pit_mrq_large_idx
+  label:
+  - - Ref($close, -11)/Ref($close, -1) - 1
+  - - LABEL0
+  learn_processors:
+  - class: DropnaLabel
+  - class: BenchmarkExcessLabel
+    kwargs:
+      benchmark_kind: return
+      benchmark_pkl: /root/.qlib/qlib_data/us_data/bench_etf_basket.pkl
+      drop_missing: true
+      fields_group: label
+      fill_method: ffill
+      label_horizon_days: 10
+      label_ref_start_days: 1
+    module_path: qlib.contrib.data.processor
+  - class: CSZScoreNorm
+    kwargs:
+      fields_group: feature
+      method: robust
+  pit_fields:
+  - assets
+  - liabilities
+  - equity
+  - revenue
+  - netinc
+  - ebit
+  - ebitda
+  - cashneq
+  - debt
+  - fcf
+  - capex
+  - workingcapital
+  - currentratio
+  - grossmargin
+  - netmargin
+  - dps
+  - eps
+  - epsdil
+  - bvps
+  - shareswa
+  - shareswadil
+  - divyield
+  pit_interval: q
+  start_time: 2016-01-01
+market: pit_mrq_large_idx
+port_analysis_config: &id002
+  backtest:
+    account: 10000000
+    benchmark: AAPL
+    end_time: 2026-01-30
+    exchange_kwargs:
+      close_cost: 0.0015
+      deal_price: close
+      limit_threshold: null
+      min_cost: 5
+      open_cost: 0.0005
+    start_time: 2022-01-01
+  strategy:
+    class: WeeklyRiskManagedTopkDropoutStrategy
+    kwargs:
+      candidate_buffer: 2
+      drawdown_limit: 0.08
+      drawdown_penalty: 0.55
+      drawdown_window: 126
+      dynamic_risk: true
+      hold_thresh: 10
+      include_current_positions: true
+      market_drawdown_limit: 0.1
+      market_drawdown_penalty: 0.75
+      market_drawdown_window: 126
+      market_index: SPY
+      market_trend_boost: 1.15
+      market_trend_boost_thresh: 0.06
+      market_trend_penalty: 0.75
+      market_trend_thresh: -0.04
+      market_trend_window: 63
+      max_risk_step_down: 0.16
+      max_risk_step_up: 0.08
+      min_history: 40
+      n_drop: 10
+      only_tradable: true
+      rebalance_weekday: 0
+      risk_ceiling: 0.85
+      risk_degree: 0.95
+      risk_floor: 0.18
+      risk_smoothing: 0.35
+      risk_smoothing_down: 0.5
+      risk_smoothing_up: 0.2
+      risk_target_ann: 0.18
+      risk_window: 20
+      signal: <PRED>
+      topk: 50
+    module_path: qlib.contrib.strategy
+qlib_init:
+  custom_ops:
+  - class: IsNull
+    module_path: qlib.contrib.ops.high_freq
+  exp_manager:
+    class: MLflowExpManager
+    kwargs:
+      default_exp_name: us_sharadar_weekly_pit_best_excess_stability_cor_events_full_uplus_stable_sf2only
+      uri: /workspace/qlib/mlruns
+    module_path: qlib.workflow.expm
+  provider_uri: /root/.qlib/qlib_data/us_data
+  region: us
+task:
+  dataset:
+    class: DatasetH
+    kwargs:
+      handler:
+        class: Alpha158WithPIT
+        kwargs: *id001
+        module_path: qlib.contrib.data.handler_sharadar
+      segments:
+        test:
+        - 2022-01-01
+        - 2026-01-30
+        train:
+        - 2016-01-01
+        - 2020-12-31
+        valid:
+        - 2021-01-01
+        - 2021-12-31
+    module_path: qlib.data.dataset
+  model:
+    class: LGBModel
+    kwargs:
+      colsample_bytree: 0.9
+      early_stopping_rounds: 200
+      lambda_l1: 20.0
+      lambda_l2: 80.0
+      learning_rate: 0.05
+      loss: mse
+      max_depth: 8
+      num_boost_round: 2000
+      num_leaves: 256
+      num_threads: 20
+      subsample: 0.9
+    module_path: qlib.contrib.model.gbdt
+  record:
+  - class: SignalRecord
+    kwargs: {}
+    module_path: qlib.workflow.record_temp
+  - class: PortAnaRecord
+    kwargs:
+      config: *id002
+    module_path: qlib.workflow.record_temp

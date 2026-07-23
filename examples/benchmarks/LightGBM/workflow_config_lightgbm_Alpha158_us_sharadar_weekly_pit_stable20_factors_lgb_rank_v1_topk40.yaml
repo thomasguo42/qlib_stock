@@ -1,0 +1,187 @@
+qlib_init:
+  provider_uri: /root/.qlib/qlib_data/us_data
+  region: us
+  custom_ops:
+  - class: IsNull
+    module_path: qlib.contrib.ops.high_freq
+  exp_manager:
+    class: MLflowExpManager
+    module_path: qlib.workflow.expm
+    kwargs:
+      uri: /workspace/qlib/mlruns
+      default_exp_name: us_sharadar_weekly_pit_stable20_factors_lgb_rank_v1_topk40
+market: pit_mrq_large_idx
+benchmark: AAPL
+data_handler_config: &id001
+  start_time: 2016-01-01
+  end_time: 2026-04-30
+  fit_start_time: 2016-01-01
+  fit_end_time: '2020-12-02'
+  instruments: pit_mrq_large_idx
+  freq: day
+  infer_processors:
+  - class: SelectiveCSZScoreNorm
+    module_path: qlib.contrib.data.processor
+    kwargs:
+      fields_group: feature
+      method: robust
+      exclude_prefixes:
+      - MKT_
+  learn_processors:
+  - class: DropnaLabel
+  - class: BenchmarkExcessLabel
+    module_path: qlib.contrib.data.processor
+    kwargs:
+      benchmark_pkl: /root/.qlib/qlib_data/us_data/bench_etf_basket.pkl
+      label_horizon_days: 20
+      label_ref_start_days: 1
+      fields_group: label
+      benchmark_kind: return
+      fill_method: ffill
+      drop_missing: true
+  - class: CSRankNorm
+    kwargs:
+      fields_group: label
+  filter_pipe:
+  - filter_type: ExpressionDFilter
+    rule_expression: $close > 5
+    filter_start_time: 2016-01-01
+    filter_end_time: 2026-04-30
+    keep: false
+  - filter_type: ExpressionDFilter
+    rule_expression: Mean($close * $volume, 20) > 10000000
+    filter_start_time: 2016-01-01
+    filter_end_time: 2026-04-30
+    keep: false
+  label:
+  - - Ref($close, -21)/Ref($close, -1) - 1
+  - - LABEL0
+  pit_fields: []
+  pit_interval: q
+  extra_fields:
+  - $roe_q
+  - $roa_q
+  - $ebitda_margin_q
+  - $fcf_margin_q
+  - $leverage_q
+  - $cash_assets_q
+  - $capex_assets_q
+  - $asset_turn_q
+  - $div_yield_px_q
+  - $earn_yield_q
+  - $book_px_q
+  - $fcf_yield_q
+  - $risk_ret_252d
+  - $inst13f_percentoftotal_63d_mean
+  - $inst13f_shrvalue_252d_pct
+  extra_names:
+  - ROE_Q
+  - ROA_Q
+  - EBITDA_MARGIN_Q
+  - FCF_MARGIN_Q
+  - LEVERAGE_Q
+  - CASH_ASSETS_Q
+  - CAPEX_ASSETS_Q
+  - ASSET_TURN_Q
+  - DIV_YIELD_PX_Q
+  - EARN_YIELD_Q
+  - BOOK_PX_Q
+  - FCF_YIELD_Q
+  - RISK_RET_252D
+  - INST13F_PERCENTOFTOTAL_63D_MEAN
+  - INST13F_SHRVALUE_252D_PCT
+port_analysis_config: &id002
+  strategy:
+    class: WeeklyRiskManagedTopkDropoutStrategy
+    module_path: qlib.contrib.strategy
+    kwargs:
+      topk: 40
+      n_drop: 8
+      signal: <PRED>
+      rebalance_weekday: 0
+      hold_thresh: 20
+      only_tradable: true
+      risk_degree: 0.95
+      dynamic_risk: true
+      risk_window: 20
+      risk_target_ann: 0.15
+      risk_floor: 0.1
+      risk_ceiling: 0.78
+      risk_smoothing: 0.35
+      risk_smoothing_up: 0.2
+      risk_smoothing_down: 0.5
+      max_risk_step_up: 0.06
+      max_risk_step_down: 0.16
+      candidate_buffer: 3
+      drawdown_window: 126
+      drawdown_limit: 0.08
+      drawdown_penalty: 0.45
+      market_index: SPY
+      market_trend_window: 63
+      market_trend_thresh: -0.04
+      market_trend_penalty: 0.7
+      market_trend_boost_thresh: 0.06
+      market_trend_boost: 1.15
+      include_current_positions: true
+      market_drawdown_window: 126
+      market_drawdown_limit: 0.1
+      market_drawdown_penalty: 0.6
+      min_history: 40
+      sector_map_csv: /root/.qlib/sharadar/raw/tickers.csv
+      sector_ticker_col: ticker
+      sector_col: sector
+      max_sector_weight: 0.4
+  backtest:
+    start_time: 2022-01-01
+    end_time: 2026-04-30
+    account: 10000000
+    benchmark: AAPL
+    exchange_kwargs:
+      limit_threshold: null
+      deal_price: close
+      open_cost: 0.0005
+      close_cost: 0.0015
+      min_cost: 5
+task:
+  model:
+    class: LGBModel
+    module_path: qlib.contrib.model.gbdt
+    kwargs:
+      loss: mse
+      learning_rate: 0.025
+      colsample_bytree: 0.7
+      subsample: 0.8
+      lambda_l1: 40.0
+      lambda_l2: 200.0
+      max_depth: 4
+      num_leaves: 24
+      min_data_in_leaf: 400
+      num_threads: 20
+      num_boost_round: 1000
+      early_stopping_rounds: 80
+  dataset:
+    class: DatasetH
+    module_path: qlib.data.dataset
+    kwargs:
+      handler:
+        class: SharadarFeatureHandler
+        module_path: qlib.contrib.data.handler_sharadar
+        kwargs: *id001
+      segments:
+        train:
+        - 2016-01-01
+        - '2020-12-02'
+        valid:
+        - 2021-01-04
+        - '2021-12-02'
+        test:
+        - 2022-01-03
+        - 2026-04-30
+  record:
+  - class: SignalRecord
+    module_path: qlib.workflow.record_temp
+    kwargs: {}
+  - class: PortAnaRecord
+    module_path: qlib.workflow.record_temp
+    kwargs:
+      config: *id002

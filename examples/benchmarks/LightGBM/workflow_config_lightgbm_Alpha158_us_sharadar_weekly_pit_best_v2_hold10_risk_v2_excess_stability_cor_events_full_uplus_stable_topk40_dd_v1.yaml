@@ -18,7 +18,7 @@ data_handler_config: &data_handler_config
   start_time: 2016-01-01
   end_time: 2026-01-30
   fit_start_time: 2016-01-01
-  fit_end_time: 2020-12-31
+  fit_end_time: 2020-12-16
   instruments: *market
   freq: day
   infer_processors:
@@ -221,9 +221,9 @@ task:
         module_path: qlib.contrib.data.handler_sharadar
         kwargs: *data_handler_config
       segments:
-        train: [2016-01-01, 2020-12-31]
-        valid: [2021-01-01, 2021-12-31]
-        test: [2022-01-01, 2026-01-30]
+        train: [2016-01-01, 2020-12-16]
+        valid: [2021-01-04, 2021-12-16]
+        test: [2022-01-03, 2026-01-30]
   record:
     - class: SignalRecord
       module_path: qlib.workflow.record_temp

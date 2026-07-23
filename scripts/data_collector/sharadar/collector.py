@@ -3,16 +3,23 @@
 
 import csv
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-import fire
 import numpy as np
 import pandas as pd
 import requests
 import yaml
 from loguru import logger
+
+
+SCRIPT_ROOT = Path(__file__).resolve().parents[2]
+if str(SCRIPT_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_ROOT))
+
+from sharadar_price_utils import prepare_sep_qlib_frame
 
 
 API_ROOT = "https://data.nasdaq.com/api/v3"
@@ -27,12 +34,13 @@ def _ensure_dir(path: Path) -> Path:
 
 
 def _read_ticker_list(path: Path) -> List[str]:
-    df = pd.read_csv(path)
-    if "ticker" in df.columns:
-        tickers = df["ticker"].astype(str).tolist()
-    else:
-        tickers = df.iloc[:, 0].astype(str).tolist()
-    return sorted(set([t.strip().upper() for t in tickers if str(t).strip()]))
+    tickers: List[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        ticker = str(line).split(",", 1)[0].strip().upper()
+        if not ticker or ticker.startswith("#") or ticker in {"TICKER", "SYMBOL"}:
+            continue
+        tickers.append(ticker)
+    return sorted(set(tickers))
 
 
 def _extract_meta_cursor(payload: dict) -> str:
@@ -615,7 +623,8 @@ class SharadarCollector:
         sep_dir: str = None,
         days_back: int = 5,
         fallback_start: str = "2000-01-01",
-    ) -> str:
+        return_report: bool = False,
+    ):
         """
         Incrementally update SEP files by pulling the last N days per ticker.
         """
@@ -625,6 +634,7 @@ class SharadarCollector:
         _ensure_dir(sep_dir)
         tickers = _read_ticker_list(Path(tickers_file))
         logger.info(f"Updating SEP for {len(tickers)} tickers -> {sep_dir}")
+        failures = []
         for idx, ticker in enumerate(tickers, 1):
             out_file = sep_dir.joinpath(f"{ticker}.csv")
             last_date = _read_last_date_from_csv_col(out_file, "date") or _read_last_date_from_csv(out_file)
@@ -634,6 +644,7 @@ class SharadarCollector:
                     self._paginate_to_csv("SEP", out_file, params=params)
                 except Exception as e:
                     logger.warning(f"SEP update failed for {ticker}: {e}")
+                    failures.append({"ticker": ticker, "stage": "download", "error": str(e)})
                 continue
             try:
                 start_date = (pd.Timestamp(last_date) - pd.Timedelta(days=days_back)).strftime("%Y-%m-%d")
@@ -645,6 +656,7 @@ class SharadarCollector:
                 self._paginate_to_csv("SEP", tmp_file, params=params)
             except Exception as e:
                 logger.warning(f"SEP update failed for {ticker}: {e}")
+                failures.append({"ticker": ticker, "stage": "download", "error": str(e)})
                 if tmp_file.exists():
                     tmp_file.unlink()
                 continue
@@ -654,12 +666,15 @@ class SharadarCollector:
                     _upsert_csv_range(out_file, df_new, date_col="date", start_date=start_date)
                 except Exception as e:
                     logger.warning(f"SEP merge failed for {ticker}: {e}")
+                    failures.append({"ticker": ticker, "stage": "merge", "error": str(e)})
             if tmp_file.exists():
                 tmp_file.unlink()
             if self.sleep:
                 time.sleep(self.sleep)
             if idx % 500 == 0:
                 logger.info(f"Progress: {idx}/{len(tickers)} tickers")
+        if return_report:
+            return {"out_dir": str(sep_dir), "failures": failures}
         return str(sep_dir)
 
     def update_sfp(
@@ -668,7 +683,8 @@ class SharadarCollector:
         sfp_dir: str = None,
         days_back: int = 5,
         fallback_start: str = "2000-01-01",
-    ) -> str:
+        return_report: bool = False,
+    ):
         """
         Incrementally update SFP files by pulling the last N days per ticker.
         """
@@ -678,6 +694,7 @@ class SharadarCollector:
         _ensure_dir(sfp_dir)
         tickers = _read_ticker_list(Path(tickers_file))
         logger.info(f"Updating SFP for {len(tickers)} tickers -> {sfp_dir}")
+        failures = []
         for idx, ticker in enumerate(tickers, 1):
             out_file = sfp_dir.joinpath(f"{ticker}.csv")
             last_date = _read_last_date_from_csv_col(out_file, "date") or _read_last_date_from_csv(out_file)
@@ -687,6 +704,7 @@ class SharadarCollector:
                     self._paginate_to_csv("SFP", out_file, params=params)
                 except Exception as e:
                     logger.warning(f"SFP update failed for {ticker}: {e}")
+                    failures.append({"ticker": ticker, "stage": "download", "error": str(e)})
                 continue
             try:
                 start_date = (pd.Timestamp(last_date) - pd.Timedelta(days=days_back)).strftime("%Y-%m-%d")
@@ -698,6 +716,7 @@ class SharadarCollector:
                 self._paginate_to_csv("SFP", tmp_file, params=params)
             except Exception as e:
                 logger.warning(f"SFP update failed for {ticker}: {e}")
+                failures.append({"ticker": ticker, "stage": "download", "error": str(e)})
                 if tmp_file.exists():
                     tmp_file.unlink()
                 continue
@@ -707,12 +726,15 @@ class SharadarCollector:
                     _upsert_csv_range(out_file, df_new, date_col="date", start_date=start_date)
                 except Exception as e:
                     logger.warning(f"SFP merge failed for {ticker}: {e}")
+                    failures.append({"ticker": ticker, "stage": "merge", "error": str(e)})
             if tmp_file.exists():
                 tmp_file.unlink()
             if self.sleep:
                 time.sleep(self.sleep)
             if idx % 200 == 0:
                 logger.info(f"Progress: {idx}/{len(tickers)} tickers")
+        if return_report:
+            return {"out_dir": str(sfp_dir), "failures": failures}
         return str(sfp_dir)
 
     def update_table_for_tickers(
@@ -728,7 +750,8 @@ class SharadarCollector:
         filters: str = "",
         columns: str = "",
         max_tickers: int = None,
-    ) -> str:
+        return_report: bool = False,
+    ):
         """
         Incrementally update a per-ticker datatable by overwriting rows >= (last_date - days_back).
         This is safer than pure append because it can absorb late corrections.
@@ -751,6 +774,7 @@ class SharadarCollector:
         logger.info(
             f"Updating {t} for {len(tickers)} tickers -> {out_path} (date_field={date_field}, days_back={days_back})"
         )
+        failures = []
         for idx, ticker in enumerate(tickers, 1):
             out_file = out_path.joinpath(f"{ticker}.csv")
             last_date = _read_last_date_from_csv_col(out_file, date_field)
@@ -772,6 +796,7 @@ class SharadarCollector:
                 self._paginate_to_csv(t, tmp_file, params=params)
             except Exception as e:
                 logger.warning(f"{t} update failed for {ticker}: {e}")
+                failures.append({"ticker": ticker, "stage": "download", "error": str(e)})
                 if tmp_file.exists():
                     tmp_file.unlink()
                 continue
@@ -782,12 +807,15 @@ class SharadarCollector:
                     _upsert_csv_range(out_file, df_new, date_col=date_field, start_date=start_date)
                 except Exception as e:
                     logger.warning(f"{t} merge failed for {ticker}: {e}")
+                    failures.append({"ticker": ticker, "stage": "merge", "error": str(e)})
             if tmp_file.exists():
                 tmp_file.unlink()
             if self.sleep:
                 time.sleep(self.sleep)
             if idx % 200 == 0:
                 logger.info(f"Progress: {idx}/{len(tickers)} tickers")
+        if return_report:
+            return {"out_dir": str(out_path), "failures": failures}
         return str(out_path)
 
     def download_sfp(
@@ -950,16 +978,8 @@ class SharadarCollector:
             df = pd.read_csv(fp)
             if df.empty:
                 continue
-            df["factor"] = df["closeadj"] / df["closeunadj"]
-            df.replace([np.inf, -np.inf], np.nan, inplace=True)
-            df.loc[df["closeunadj"] == 0, "factor"] = np.nan
-            df["open"] = df["open"] * df["factor"]
-            df["high"] = df["high"] * df["factor"]
-            df["low"] = df["low"] * df["factor"]
-            df["close"] = df["close"] * df["factor"]
-            df = df.loc[:, ["date", "open", "high", "low", "close", "volume", "factor"]]
-            df = df.dropna(subset=["date", "open", "high", "low", "close"])
-            df = df.sort_values("date")
+            df = prepare_sep_qlib_frame(df)
+            df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
             out_file = out_path.joinpath(fp.name)
             df.to_csv(out_file, index=False)
             if idx % 500 == 0:
@@ -968,4 +988,6 @@ class SharadarCollector:
 
 
 if __name__ == "__main__":
+    import fire
+
     fire.Fire(SharadarCollector)

@@ -174,6 +174,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default=0.0,
         help="Optional absolute clip value for raw daily numeric values before rolling (0 to disable)",
     )
+    p.add_argument(
+        "--availability_lag_days",
+        type=int,
+        default=0,
+        help="Shift date_col forward by this many calendar days before feature construction.",
+    )
     return p
 
 
@@ -227,6 +233,8 @@ def main() -> None:
 
         df[args.ticker_col] = df[args.ticker_col].astype(str).str.upper().str.strip()
         df[args.date_col] = pd.to_datetime(df[args.date_col], errors="coerce")
+        if int(args.availability_lag_days) != 0:
+            df[args.date_col] = df[args.date_col] + pd.Timedelta(days=int(args.availability_lag_days))
         df = df.dropna(subset=[args.ticker_col, args.date_col])
         df = df[df[args.ticker_col] != ""]
 

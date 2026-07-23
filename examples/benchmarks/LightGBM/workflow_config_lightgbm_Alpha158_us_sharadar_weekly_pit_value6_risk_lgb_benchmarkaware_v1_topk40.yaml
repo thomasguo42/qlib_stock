@@ -1,0 +1,179 @@
+qlib_init:
+  provider_uri: /root/.qlib/qlib_data/us_data
+  region: us
+  custom_ops:
+  - class: IsNull
+    module_path: qlib.contrib.ops.high_freq
+  exp_manager:
+    class: MLflowExpManager
+    module_path: qlib.workflow.expm
+    kwargs:
+      uri: /workspace/qlib/mlruns
+      default_exp_name: us_sharadar_weekly_pit_value6_risk_lgb_benchmarkaware_v1_topk40
+market: pit_mrq_large_idx
+benchmark: AAPL
+data_handler_config: &id001
+  start_time: 2016-01-01
+  end_time: 2026-04-30
+  fit_start_time: 2016-01-01
+  fit_end_time: 2020-12-16
+  instruments: pit_mrq_large_idx
+  freq: day
+  infer_processors:
+  - class: CSZScoreNorm
+    kwargs:
+      fields_group: feature
+      method: robust
+  learn_processors:
+  - class: DropnaLabel
+  - class: BenchmarkExcessLabel
+    module_path: qlib.contrib.data.processor
+    kwargs:
+      benchmark_pkl: /root/.qlib/qlib_data/us_data/bench_etf_basket.pkl
+      label_horizon_days: 10
+      label_ref_start_days: 1
+      fields_group: label
+      benchmark_kind: return
+      fill_method: ffill
+      drop_missing: true
+  filter_pipe:
+  - filter_type: ExpressionDFilter
+    rule_expression: $close > 5
+    filter_start_time: 2016-01-01
+    filter_end_time: 2026-04-30
+    keep: false
+  - filter_type: ExpressionDFilter
+    rule_expression: Mean($close * $volume, 20) > 10000000
+    filter_start_time: 2016-01-01
+    filter_end_time: 2026-04-30
+    keep: false
+  label:
+  - - Ref($close, -11)/Ref($close, -1) - 1
+  - - LABEL0
+  pit_fields: []
+  pit_interval: q
+  extra_fields:
+  - $div_yield_px_q
+  - $book_px_q
+  - $earn_yield_q
+  - $leverage_q
+  - $fcf_yield_q
+  - $ebitda_margin_q
+  - $risk_ret_20d
+  - $risk_ret_63d
+  - $risk_ret_252d
+  - $risk_vol_20d
+  - $risk_vol_63d
+  - $risk_dvol_20d
+  - $risk_beta_spy_63d
+  - $risk_beta_spy_252d
+  - $risk_relret_spy_63d
+  - $risk_relret_spy_252d
+  - $mkt_spy_ret_20d
+  - $mkt_spy_ret_63d
+  - $mkt_spy_vol_20d
+  - $mkt_spy_dd_63d
+  - $mkt_qqq_ret_63d
+  - $mkt_qqq_vol_20d
+  - $mkt_iwm_ret_63d
+  - $mkt_iwm_vol_20d
+  extra_names:
+  - DIV_YIELD_PX_Q
+  - BOOK_PX_Q
+  - EARN_YIELD_Q
+  - LEVERAGE_Q
+  - FCF_YIELD_Q
+  - EBITDA_MARGIN_Q
+  - RISK_RET_20D
+  - RISK_RET_63D
+  - RISK_RET_252D
+  - RISK_VOL_20D
+  - RISK_VOL_63D
+  - RISK_DVOL_20D
+  - RISK_BETA_SPY_63D
+  - RISK_BETA_SPY_252D
+  - RISK_RELRET_SPY_63D
+  - RISK_RELRET_SPY_252D
+  - MKT_SPY_RET_20D
+  - MKT_SPY_RET_63D
+  - MKT_SPY_VOL_20D
+  - MKT_SPY_DD_63D
+  - MKT_QQQ_RET_63D
+  - MKT_QQQ_VOL_20D
+  - MKT_IWM_RET_63D
+  - MKT_IWM_VOL_20D
+port_analysis_config: &id002
+  strategy:
+    class: WeeklyBenchmarkAwareScoreWeightedStrategy
+    module_path: qlib.contrib.strategy
+    kwargs:
+      topk: 40
+      rebalance_weekday: 0
+      risk_degree: 0.95
+      weighting: rank
+      benchmark_core_weight: 0.75
+      benchmark_topn: 100
+      benchmark_marketcap_field: $marketcap_q
+      max_weight: 0.05
+      max_active_weight: 0.04
+      sector_map_csv: /root/.qlib/sharadar/raw/tickers.csv
+      sector_ticker_col: ticker
+      sector_col: sector
+      liquidity_window: 20
+      liquidity_buffer: 3
+      vol_window: 63
+      vol_scale: false
+  backtest:
+    start_time: 2022-01-01
+    end_time: 2026-04-30
+    account: 10000000
+    benchmark: AAPL
+    exchange_kwargs:
+      limit_threshold: null
+      deal_price: close
+      open_cost: 0.0005
+      close_cost: 0.0015
+      min_cost: 5
+task:
+  model:
+    class: LGBModel
+    module_path: qlib.contrib.model.gbdt
+    kwargs:
+      loss: mse
+      learning_rate: 0.025
+      colsample_bytree: 0.7
+      subsample: 0.8
+      lambda_l1: 40.0
+      lambda_l2: 200.0
+      max_depth: 4
+      num_leaves: 24
+      min_data_in_leaf: 400
+      num_threads: 20
+      num_boost_round: 1000
+      early_stopping_rounds: 80
+  dataset:
+    class: DatasetH
+    module_path: qlib.data.dataset
+    kwargs:
+      handler:
+        class: Alpha158WithPIT
+        module_path: qlib.contrib.data.handler_sharadar
+        kwargs: *id001
+      segments:
+        train:
+        - 2016-01-01
+        - 2020-12-16
+        valid:
+        - 2021-01-04
+        - 2021-12-16
+        test:
+        - 2022-01-03
+        - 2026-04-30
+  record:
+  - class: SignalRecord
+    module_path: qlib.workflow.record_temp
+    kwargs: {}
+  - class: PortAnaRecord
+    module_path: qlib.workflow.record_temp
+    kwargs:
+      config: *id002

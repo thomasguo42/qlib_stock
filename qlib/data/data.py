@@ -8,8 +8,10 @@ from __future__ import print_function
 import re
 import abc
 import copy
+import os
 import queue
 import bisect
+from collections import OrderedDict
 import numpy as np
 import pandas as pd
 from typing import List, Union, Optional
@@ -33,7 +35,6 @@ from ..utils import (
     normalize_cache_fields,
     code_to_fname,
     time_to_slc_point,
-    read_period_data,
     get_period_list,
 )
 from ..utils.paral import ParallelExt
@@ -745,6 +746,33 @@ class LocalPITProvider(PITProvider):
     # TODO: Add PIT backend file storage
     # NOTE: This class is not multi-threading-safe!!!!
 
+    def __init__(self):
+        self._period_data_cache = OrderedDict()
+        self._period_data_cache_size = int(os.environ.get("QLIB_PIT_DATA_CACHE_SIZE", "4096") or 0)
+
+    def _load_period_records(self, data_path, dtype):
+        if self._period_data_cache_size <= 0:
+            return np.fromfile(data_path, dtype=dtype)
+
+        cache_key = str(data_path)
+        if cache_key in self._period_data_cache:
+            data = self._period_data_cache.pop(cache_key)
+            self._period_data_cache[cache_key] = data
+            return data
+
+        data = np.fromfile(data_path, dtype=dtype)
+        self._period_data_cache[cache_key] = data
+        while len(self._period_data_cache) > self._period_data_cache_size:
+            self._period_data_cache.popitem(last=False)
+        return data
+
+    @staticmethod
+    def _latest_period_value(records, period, default_value):
+        locs = np.flatnonzero(records["period"] == period)
+        if len(locs) == 0:
+            return default_value
+        return records["value"][locs[-1]]
+
     def period_feature(self, instrument, field, start_index, end_index, cur_time, period=None):
         if not isinstance(cur_time, pd.Timestamp):
             raise ValueError(
@@ -760,6 +788,7 @@ class LocalPITProvider(PITProvider):
             ("_next", C.pit_record_type["index"]),
         ]
         VALUE_DTYPE = C.pit_record_type["value"]
+        NAN_VALUE = C.pit_record_nan["value"]
 
         field = str(field).lower()[2:]
         instrument = code_to_fname(instrument)
@@ -790,15 +819,16 @@ class LocalPITProvider(PITProvider):
         #    - If we design it carefully, we can go through for only once to get the historical evolution of the data.
         # So I decide to deprecated previous implementation and keep the logic of the program simple
         # Instead, I'll add a cache for the index file.
-        data = np.fromfile(data_path, dtype=DATA_RECORDS)
+        data = self._load_period_records(data_path, dtype=DATA_RECORDS)
 
         # find all revision periods before `cur_time`
         cur_time_int = int(cur_time.year) * 10000 + int(cur_time.month) * 100 + int(cur_time.day)
         loc = np.searchsorted(data["date"], cur_time_int, side="right")
         if loc <= 0:
             return pd.Series(dtype=C.pit_record_type["value"])
-        last_period = data["period"][:loc].max()  # return the latest quarter
-        first_period = data["period"][:loc].min()
+        available_records = data[:loc]
+        last_period = available_records["period"].max()  # return the latest quarter
+        first_period = available_records["period"].min()
         period_list = get_period_list(first_period, last_period, quarterly)
         if period is not None:
             # NOTE: `period` has higher priority than `start_index` & `end_index`
@@ -810,11 +840,7 @@ class LocalPITProvider(PITProvider):
             period_list = period_list[max(0, len(period_list) + start_index - 1) : len(period_list) + end_index]
         value = np.full((len(period_list),), np.nan, dtype=VALUE_DTYPE)
         for i, p in enumerate(period_list):
-            # last_period_index = self.period_index[field].get(period)  # For acceleration
-            value[i], now_period_index = read_period_data(
-                index_path, data_path, p, cur_time_int, quarterly  # , last_period_index  # For acceleration
-            )
-            # self.period_index[field].update({period: now_period_index})  # For acceleration
+            value[i] = self._latest_period_value(available_records, p, NAN_VALUE)
         # NOTE: the index is period_list; So it may result in unexpected values(e.g. nan)
         # when calculation between different features and only part of its financial indicator is published
         series = pd.Series(value, index=period_list, dtype=VALUE_DTYPE)

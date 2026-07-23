@@ -1,0 +1,193 @@
+qlib_init:
+  provider_uri: /root/.qlib/qlib_data/us_data
+  region: us
+  custom_ops:
+    - class: IsNull
+      module_path: qlib.contrib.ops.high_freq
+  exp_manager:
+    class: MLflowExpManager
+    module_path: qlib.workflow.expm
+    kwargs:
+      uri: /workspace/qlib/mlruns
+      default_exp_name: us_sharadar_weekly_pit_clean_neutral_lgb_v1_topk40
+
+market: &market pit_mrq_large_idx
+benchmark: &benchmark AAPL
+
+data_handler_config: &data_handler_config
+  start_time: 2016-01-01
+  end_time: 2026-04-30
+  fit_start_time: 2016-01-01
+  fit_end_time: 2020-12-16
+  instruments: *market
+  freq: day
+  infer_processors:
+    - class: GroupNeutralize
+      module_path: qlib.contrib.data.processor
+      kwargs:
+        group_map_csv: /root/.qlib/sharadar/raw/tickers.csv
+        ticker_col: ticker
+        group_col: sector
+        fields_group: feature
+        min_group_size: 10
+    - class: CSZScoreNorm
+      kwargs:
+        fields_group: feature
+        method: robust
+  learn_processors:
+    - class: DropnaLabel
+    - class: BenchmarkExcessLabel
+      module_path: qlib.contrib.data.processor
+      kwargs:
+        benchmark_pkl: /root/.qlib/qlib_data/us_data/bench_etf_basket.pkl
+        label_horizon_days: 10
+        label_ref_start_days: 1
+        fields_group: label
+        benchmark_kind: return
+        fill_method: ffill
+        drop_missing: true
+    - class: GroupNeutralize
+      module_path: qlib.contrib.data.processor
+      kwargs:
+        group_map_csv: /root/.qlib/sharadar/raw/tickers.csv
+        ticker_col: ticker
+        group_col: sector
+        fields_group: label
+        min_group_size: 10
+  filter_pipe:
+    - filter_type: ExpressionDFilter
+      rule_expression: $close > 5
+      filter_start_time: 2016-01-01
+      filter_end_time: 2026-04-30
+      keep: false
+    - filter_type: ExpressionDFilter
+      rule_expression: Mean($close * $volume, 20) > 10000000
+      filter_start_time: 2016-01-01
+      filter_end_time: 2026-04-30
+      keep: false
+  label:
+    - - Ref($close, -11)/Ref($close, -1) - 1
+    - - LABEL0
+  # Keep raw PIT features disabled until feature diagnostics show they add stable IC.
+  # These daily ratio features are precomputed by scripts/rebuild_us_sharadar_pit_ratio_features.py.
+  pit_fields: []
+  pit_interval: q
+  extra_fields:
+    - $roe_q
+    - $roa_q
+    - $ebitda_margin_q
+    - $fcf_margin_q
+    - $leverage_q
+    - $cash_assets_q
+    - $capex_assets_q
+    - $asset_turn_q
+    - $div_yield_px_q
+    - $earn_yield_q
+    - $book_px_q
+    - $fcf_yield_q
+  extra_names:
+    - ROE_Q
+    - ROA_Q
+    - EBITDA_MARGIN_Q
+    - FCF_MARGIN_Q
+    - LEVERAGE_Q
+    - CASH_ASSETS_Q
+    - CAPEX_ASSETS_Q
+    - ASSET_TURN_Q
+    - DIV_YIELD_PX_Q
+    - EARN_YIELD_Q
+    - BOOK_PX_Q
+    - FCF_YIELD_Q
+
+port_analysis_config: &port_analysis_config
+  strategy:
+    class: WeeklyRiskManagedTopkDropoutStrategy
+    module_path: qlib.contrib.strategy
+    kwargs:
+      topk: 40
+      n_drop: 8
+      signal: <PRED>
+      rebalance_weekday: 0
+      hold_thresh: 10
+      only_tradable: true
+      risk_degree: 0.95
+      dynamic_risk: true
+      risk_window: 20
+      risk_target_ann: 0.17
+      risk_floor: 0.10
+      risk_ceiling: 0.85
+      risk_smoothing: 0.35
+      risk_smoothing_up: 0.20
+      risk_smoothing_down: 0.50
+      max_risk_step_up: 0.08
+      max_risk_step_down: 0.20
+      candidate_buffer: 3
+      drawdown_window: 126
+      drawdown_limit: 0.06
+      drawdown_penalty: 0.40
+      market_index: SPY
+      market_trend_window: 63
+      market_trend_thresh: -0.04
+      market_trend_penalty: 0.70
+      market_trend_boost_thresh: 0.06
+      market_trend_boost: 1.15
+      include_current_positions: true
+      market_drawdown_window: 126
+      market_drawdown_limit: 0.08
+      market_drawdown_penalty: 0.60
+      min_history: 40
+  backtest:
+    start_time: 2022-01-01
+    end_time: 2026-04-30
+    account: 10000000
+    benchmark: *benchmark
+    exchange_kwargs:
+      limit_threshold: null
+      deal_price: close
+      open_cost: 0.0005
+      close_cost: 0.0015
+      min_cost: 5
+
+task:
+  model:
+    class: LGBModel
+    module_path: qlib.contrib.model.gbdt
+    kwargs:
+      loss: mse
+      learning_rate: 0.03
+      colsample_bytree: 0.75
+      subsample: 0.80
+      lambda_l1: 30.0
+      lambda_l2: 150.0
+      max_depth: 5
+      num_leaves: 32
+      min_data_in_leaf: 300
+      num_threads: 20
+      num_boost_round: 1200
+      early_stopping_rounds: 100
+  dataset:
+    class: DatasetH
+    module_path: qlib.data.dataset
+    kwargs:
+      handler:
+        class: Alpha158WithPIT
+        module_path: qlib.contrib.data.handler_sharadar
+        kwargs: *data_handler_config
+      segments:
+        train:
+          - 2016-01-01
+          - 2020-12-16
+        valid:
+          - 2021-01-04
+          - 2021-12-16
+        test:
+          - 2022-01-03
+          - 2026-04-30
+  record:
+    - class: SignalRecord
+      module_path: qlib.workflow.record_temp
+      kwargs: {}
+    - class: PortAnaRecord
+      module_path: qlib.workflow.record_temp
+      kwargs:
+        config: *port_analysis_config

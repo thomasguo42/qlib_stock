@@ -17,6 +17,10 @@ from .rule_strategy import (
 from .cost_control import SoftTopkStrategy
 from .weekly import (
     WeeklyTopkDropoutStrategy,
+    BenchmarkAwareScoreWeightedStrategy,
+    HedgedBenchmarkAwareScoreWeightedStrategy,
+    WeeklyBenchmarkAwareScoreWeightedStrategy,
+    WeeklyHedgedBenchmarkAwareScoreWeightedStrategy,
     WeeklyScoreWeightedStrategy,
     RiskManagedTopkDropoutStrategy,
     WeeklyRiskManagedTopkDropoutStrategy,
@@ -33,6 +37,10 @@ __all__ = [
     "SBBStrategyEMA",
     "SoftTopkStrategy",
     "WeeklyTopkDropoutStrategy",
+    "BenchmarkAwareScoreWeightedStrategy",
+    "HedgedBenchmarkAwareScoreWeightedStrategy",
+    "WeeklyBenchmarkAwareScoreWeightedStrategy",
+    "WeeklyHedgedBenchmarkAwareScoreWeightedStrategy",
     "WeeklyScoreWeightedStrategy",
     "RiskManagedTopkDropoutStrategy",
     "WeeklyRiskManagedTopkDropoutStrategy",

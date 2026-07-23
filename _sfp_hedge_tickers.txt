@@ -1,0 +1,6 @@
+# Broad inverse ETFs for long-only hedge sleeves.
+# These must exist in raw Sharadar SFP and in the qlib provider before a
+# hedged release candidate can pass the hedge feasibility audit.
+SH
+PSQ
+RWM

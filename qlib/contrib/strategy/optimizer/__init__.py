@@ -3,7 +3,13 @@
 
 from .base import BaseOptimizer
 from .optimizer import PortfolioOptimizer
-from .enhanced_indexing import EnhancedIndexingOptimizer
+
+try:
+    from .enhanced_indexing import EnhancedIndexingOptimizer
+except ModuleNotFoundError as e:
+    if str(getattr(e, "name", "")) != "numpy.lib.array_utils":
+        raise
+    EnhancedIndexingOptimizer = None
 
 
 __all__ = ["BaseOptimizer", "PortfolioOptimizer", "EnhancedIndexingOptimizer"]

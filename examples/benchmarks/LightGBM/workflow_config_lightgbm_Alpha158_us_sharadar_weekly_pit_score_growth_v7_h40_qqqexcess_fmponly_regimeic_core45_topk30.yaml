@@ -1,0 +1,223 @@
+qlib_init:
+  provider_uri: /root/.qlib/qlib_data/us_data
+  region: us
+  custom_ops:
+  - class: IsNull
+    module_path: qlib.contrib.ops.high_freq
+  exp_manager:
+    class: MLflowExpManager
+    module_path: qlib.workflow.expm
+    kwargs:
+      uri: /workspace/qlib/mlruns
+      default_exp_name: us_sharadar_weekly_pit_score_growth_v7_h40_qqqexcess_fmponly_regimeic_core45_topk30
+market: pit_mrq_large_idx
+benchmark: AAPL
+data_handler_config: &id001
+  start_time: '2022-01-01'
+  end_time: '2026-04-30'
+  fit_start_time: '2022-01-03'
+  fit_end_time: '2023-06-30'
+  instruments: pit_mrq_large_idx
+  freq: day
+  infer_processors:
+  - class: SelectiveCSZScoreNorm
+    module_path: qlib.contrib.data.processor
+    kwargs:
+      fields_group: feature
+      method: robust
+      exclude_prefixes:
+      - MKT_
+  learn_processors:
+  - class: DropnaLabel
+  - class: BenchmarkExcessLabel
+    module_path: qlib.contrib.data.processor
+    kwargs:
+      benchmark_pkl: /root/.qlib/qlib_data/us_data/bench_qqq.pkl
+      benchmark_kind: return
+      label_horizon_days: 40
+      label_ref_start_days: 1
+  filter_pipe:
+  - filter_type: ExpressionDFilter
+    rule_expression: $close > 5
+    filter_start_time: 2016-01-01
+    filter_end_time: 2026-04-30
+    keep: false
+  - filter_type: ExpressionDFilter
+    rule_expression: Mean($close * $volume, 20) > 10000000
+    filter_start_time: 2016-01-01
+    filter_end_time: 2026-04-30
+    keep: false
+  label:
+  - - Ref($close, -41)/Ref($close, -1) - 1
+  - - LABEL0
+  pit_fields: []
+  pit_interval: q
+  extra_fields:
+  - $mkt_qqq_ret_63d_lag1
+  - $fmp_earn_count_20d_sum
+  - $fmp_earn_count_63d_sum
+  - $fmp_eps_surprise_pct_latest
+  - $fmp_eps_surprise_pct_63d_event_mean
+  - $fmp_rev_surprise_pct_latest
+  - $fmp_rev_surprise_pct_63d_event_mean
+  - $fmp_grade_count_20d_sum
+  - $fmp_grade_count_63d_sum
+  - $fmp_grade_up_63d_sum
+  - $fmp_grade_down_63d_sum
+  - $fmp_grade_delta_63d_event_mean
+  - $fmp_grade_new_score_latest
+  - $fmp_pt_count_63d_sum
+  - $fmp_pt_upside_latest
+  - $fmp_pt_upside_63d_event_mean
+  - $fmp_rating_bullish_ratio_snapshot
+  - $fmp_rating_bearish_ratio_snapshot
+  - $fmp_rating_net_bullish_snapshot
+  - $fmp_rating_net_bullish_63d_chg
+  extra_names:
+  - MKT_QQQ_RET_63D_LAG1
+  - FMP_EARN_COUNT_20D_SUM
+  - FMP_EARN_COUNT_63D_SUM
+  - FMP_EPS_SURPRISE_PCT_LATEST
+  - FMP_EPS_SURPRISE_PCT_63D_EVENT_MEAN
+  - FMP_REV_SURPRISE_PCT_LATEST
+  - FMP_REV_SURPRISE_PCT_63D_EVENT_MEAN
+  - FMP_GRADE_COUNT_20D_SUM
+  - FMP_GRADE_COUNT_63D_SUM
+  - FMP_GRADE_UP_63D_SUM
+  - FMP_GRADE_DOWN_63D_SUM
+  - FMP_GRADE_DELTA_63D_EVENT_MEAN
+  - FMP_GRADE_NEW_SCORE_LATEST
+  - FMP_PT_COUNT_63D_SUM
+  - FMP_PT_UPSIDE_LATEST
+  - FMP_PT_UPSIDE_63D_EVENT_MEAN
+  - FMP_RATING_BULLISH_RATIO_SNAPSHOT
+  - FMP_RATING_BEARISH_RATIO_SNAPSHOT
+  - FMP_RATING_NET_BULLISH_SNAPSHOT
+  - FMP_RATING_NET_BULLISH_63D_CHG
+port_analysis_config: &id002
+  strategy:
+    class: WeeklyBenchmarkAwareScoreWeightedStrategy
+    module_path: qlib.contrib.strategy
+    kwargs:
+      topk: 30
+      rebalance_weekday: 0
+      risk_degree: 1.0
+      weighting: rank
+      benchmark_core_weight: 0.45
+      benchmark_topn: 1
+      benchmark_marketcap_field: $marketcap_q
+      max_weight: 0.16
+      max_active_weight: 0.07
+      sector_map_csv: /root/.qlib/sharadar/raw/tickers.csv
+      sector_ticker_col: ticker
+      sector_col: sector
+      liquidity_window: 20
+      liquidity_buffer: 3
+      vol_window: 63
+      vol_scale: true
+      benchmark_tickers:
+      - QQQ
+      benchmark_max_weight: 1.0
+      max_turnover: 0.1
+      min_trade_weight: 0.001
+      min_position_weight: 0.001
+      max_holdings: 60
+      dynamic_alpha_weight: true
+      alpha_quality_window: 63
+      alpha_quality_lower_excess: -0.015
+      alpha_quality_upper_excess: 0.035
+      min_alpha_scale: 0.25
+      max_sector_weight: 0.35
+      feature_score_weights:
+        $log_marketcap_q: 0.15
+        $risk_vol_20d: -0.1
+      feature_min_percentiles:
+        $log_marketcap_q: 0.25
+      dynamic_risk: true
+      market_index: QQQ
+      risk_floor: 0.55
+      risk_ceiling: 1.0
+      risk_smoothing_up: 0.35
+      risk_smoothing_down: 0.85
+      max_risk_step_up: 0.1
+      max_risk_step_down: 0.35
+      market_trend_window: 63
+      market_trend_thresh: -0.04
+      market_trend_penalty: 0.75
+      market_trend_boost_thresh: 0.1
+      market_trend_boost: 1.0
+      market_drawdown_window: 126
+      market_drawdown_limit: 0.1
+      market_drawdown_penalty: 0.7
+      crash_guard: true
+      crash_return_lookback: 5
+      crash_return_limit: 0.06
+      crash_penalty: 0.65
+      crash_cooldown_steps: 2
+      risk_min_history: 40
+  backtest:
+    start_time: 2022-01-01
+    end_time: 2026-04-30
+    account: 10000000
+    benchmark: AAPL
+    exchange_kwargs:
+      limit_threshold: null
+      deal_price: close
+      open_cost: 0.0005
+      close_cost: 0.0015
+      min_cost: 5
+task:
+  model:
+    class: ICSelectedScoreModel
+    module_path: qlib.contrib.model.score
+    kwargs:
+      max_features: 8
+      min_selected_features: 2
+      min_abs_ic: 0.003
+      min_ic_days: 100
+      min_daily_count: 30
+      min_coverage: 0.3
+      min_same_sign_years: 2
+      min_worst_year_signed_ic: -0.035
+      min_recent_signed_ic: -0.005
+      recent_window_days: 756
+      selection_step_days: 5
+      recent_weight: 0.6
+      weight_power: 1.0
+      normalize_by_date: true
+      missing: raise
+      fallback_to_best: true
+      top_quantile: 0.2
+      tail_weight: 0.5
+      min_topq_spread: 0.0
+      min_worst_year_topq_spread: -0.015
+      regime_feature: MKT_QQQ_RET_63D_LAG1
+      risk_on_threshold: 0.03
+      risk_off_threshold: -0.04
+      regime_min_ic_days: 35
+  dataset:
+    class: DatasetH
+    module_path: qlib.data.dataset
+    kwargs:
+      handler:
+        class: SharadarFeatureHandler
+        module_path: qlib.contrib.data.handler_sharadar
+        kwargs: *id001
+      segments:
+        train:
+        - '2022-01-03'
+        - '2023-06-30'
+        valid:
+        - '2023-09-01'
+        - '2023-12-29'
+        test:
+        - '2024-03-01'
+        - '2026-04-30'
+  record:
+  - class: SignalRecord
+    module_path: qlib.workflow.record_temp
+    kwargs: {}
+  - class: PortAnaRecord
+    module_path: qlib.workflow.record_temp
+    kwargs:
+      config: *id002

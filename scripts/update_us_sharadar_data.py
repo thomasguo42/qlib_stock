@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -10,6 +11,13 @@ from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from sharadar_price_utils import prepare_sep_qlib_frame
 
 
 class _Tee:
@@ -89,10 +97,22 @@ def _write_tickers_csv_from_instruments(instruments_tsv: Path, out_csv: Path, ma
 
 
 def _write_tickers_csv_from_lines(lines: List[str], out_csv: Path) -> int:
-    tickers = sorted({x.strip().upper() for x in lines if x.strip()})
+    tickers = sorted(_benchmark_tickers_from_lines(lines))
     out_csv.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame({"ticker": tickers}).to_csv(out_csv, index=False)
     return len(tickers)
+
+
+def _benchmark_tickers_from_lines(lines: List[str]) -> List[str]:
+    tickers: List[str] = []
+    seen = set()
+    for line in lines:
+        ticker = str(line).strip().upper()
+        if not ticker or ticker.startswith("#") or ticker in {"TICKER", "SYMBOL"} or ticker in seen:
+            continue
+        tickers.append(ticker)
+        seen.add(ticker)
+    return tickers
 
 
 def _read_last_date_from_csv(path: Path, date_col: str = "date") -> str:
@@ -121,30 +141,154 @@ def _detect_new_end_from_sep(raw_sep_dir: Path, tickers: List[str]) -> str:
     return best
 
 
+def _resolve_benchmark_tickers_file(path_arg: str) -> Path:
+    if str(path_arg).strip():
+        return Path(path_arg).expanduser().resolve()
+    repo_default = Path(__file__).resolve().parents[1] / "_sfp_benchmark_tickers.txt"
+    legacy_default = Path("/workspace/qlib/_sfp_benchmark_tickers.txt")
+    if legacy_default.exists():
+        return legacy_default
+    return repo_default
+
+
+def _active_market_tickers(inst_path: Path, active_end: str) -> List[str]:
+    df = pd.read_csv(inst_path, sep="\t", header=None, names=["ticker", "start", "end"])
+    if df.empty:
+        return []
+    mask = df["end"].astype(str) == str(active_end)
+    return df.loc[mask, "ticker"].astype(str).str.upper().str.strip().drop_duplicates().tolist()
+
+
+def _market_instruments_max_end(inst_path: Path) -> str:
+    df = pd.read_csv(inst_path, sep="\t", header=None, names=["ticker", "start", "end"])
+    if df.empty:
+        return ""
+    end = pd.to_datetime(df["end"], errors="coerce").dropna()
+    if end.empty:
+        return ""
+    return pd.Timestamp(end.max()).strftime("%Y-%m-%d")
+
+
+def _earliest_date(*dates: str) -> str:
+    parsed = [pd.Timestamp(d) for d in dates if str(d).strip()]
+    if not parsed:
+        return ""
+    return min(parsed).strftime("%Y-%m-%d")
+
+
+def _sep_coverage_gaps(
+    raw_sep_dir: Path,
+    tickers: List[str],
+    *,
+    required_end: str,
+    max_lag_days: int,
+) -> Dict[str, str]:
+    gaps: Dict[str, str] = {}
+    required = pd.Timestamp(required_end)
+    for t in tickers:
+        fp = raw_sep_dir / f"{t}.csv"
+        mx = _read_last_date_from_csv(fp, "date")
+        if not mx:
+            gaps[t] = "<missing>"
+            continue
+        lag_days = int((required - pd.Timestamp(mx)).days)
+        if lag_days > int(max_lag_days):
+            gaps[t] = mx
+    return gaps
+
+
+def _write_update_report(out_root: Path, stamp: str, reports: Dict[str, Dict]) -> Path:
+    report_dir = out_root / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    out = report_dir / f"update_report_{stamp}.json"
+    out.write_text(json.dumps(reports, indent=2, sort_keys=True), encoding="utf-8")
+    return out
+
+
+def _failure_count(report) -> int:
+    if not isinstance(report, dict):
+        return 0
+    failures = report.get("failures", [])
+    return len(failures) if isinstance(failures, list) else 0
+
+
+def _reuse_raw_report(raw_dir: Path, tickers: List[str], date_col: str) -> Dict:
+    files = 0
+    missing = 0
+    latest = ""
+    for ticker in tickers:
+        last = _read_last_date_from_csv(raw_dir / f"{ticker}.csv", date_col)
+        if not last:
+            missing += 1
+            continue
+        files += 1
+        if not latest or pd.Timestamp(last) > pd.Timestamp(latest):
+            latest = last
+    return {
+        "status": "reused_raw",
+        "raw_dir": str(raw_dir),
+        "date_col": date_col,
+        "tickers": len(tickers),
+        "files_with_dates": files,
+        "missing_or_empty": missing,
+        "latest_date": latest,
+        "failures": [],
+    }
+
+
+def _feature_missing_ratio(feature_dir: Path, tickers: List[str]) -> float:
+    if not tickers:
+        return 0.0
+    missing = 0
+    for t in tickers:
+        fp = feature_dir / f"{t}.csv"
+        if not fp.exists() or fp.stat().st_size == 0:
+            missing += 1
+    return float(missing) / float(len(tickers))
+
+
 def _prepare_price_delta(raw_sep_file: Path, old_last_trading_date: str) -> pd.DataFrame:
     df = pd.read_csv(raw_sep_file, low_memory=False)
     if df.empty:
         return df
-    if "date" not in df.columns:
-        return df.iloc[0:0]
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    df = df.dropna(subset=["date"]).sort_values("date")
-    if "closeadj" not in df.columns or "closeunadj" not in df.columns:
-        return df.iloc[0:0]
-    df["factor"] = df["closeadj"] / df["closeunadj"]
-    df.replace([np.inf, -np.inf], np.nan, inplace=True)
-    df.loc[df["closeunadj"] == 0, "factor"] = np.nan
-    for col in ["open", "high", "low", "close"]:
-        if col in df.columns:
-            df[col] = df[col] * df["factor"]
-    keep = ["date", "open", "high", "low", "close", "volume", "factor"]
-    for k in keep:
-        if k not in df.columns:
-            df[k] = np.nan
-    df = df.loc[:, keep].dropna(subset=["date", "open", "high", "low", "close"])
+    df = prepare_sep_qlib_frame(df)
+    if df.empty:
+        return df
     df = df[df["date"] > pd.Timestamp(old_last_trading_date)]
     df["date"] = df["date"].dt.strftime("%Y-%m-%d")
     return df
+
+
+def _prepare_sfp_qlib_frame(raw_sfp_file: Path) -> pd.DataFrame:
+    df = pd.read_csv(raw_sfp_file, low_memory=False)
+    if df.empty:
+        return df
+    symbol = raw_sfp_file.stem.strip().upper()
+    if "ticker" in df.columns:
+        tickers = df["ticker"].astype(str).str.upper().str.strip().dropna()
+        if not tickers.empty:
+            symbol = str(tickers.iloc[0])
+    df = prepare_sep_qlib_frame(df)
+    if df.empty:
+        return df
+    df.insert(0, "symbol", symbol)
+    df["date"] = df["date"].dt.strftime("%Y-%m-%d")
+    return df
+
+
+def _write_sfp_qlib_files(raw_sfp_dir: Path, tickers: List[str], out_dir: Path) -> int:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    written = 0
+    for ticker in _benchmark_tickers_from_lines(tickers):
+        raw_sfp_file = raw_sfp_dir / f"{ticker}.csv"
+        if not raw_sfp_file.exists():
+            continue
+        df = _prepare_sfp_qlib_frame(raw_sfp_file)
+        if df.empty:
+            continue
+        df.to_csv(out_dir / f"{ticker}.csv", index=False)
+        written += 1
+    return written
 
 
 def _load_feature_delta(feature_file: Path, dates: List[str]) -> Optional[pd.DataFrame]:
@@ -273,7 +417,7 @@ def _run(cmd: List[str], *, dry_run: bool) -> None:
 
 def _main_impl(args: argparse.Namespace) -> int:
     api_key = args.api_key.strip() or os.getenv("NDL_API_KEY", "").strip()
-    if not api_key:
+    if not api_key and not args.reuse_raw:
         print("ERROR: provide --api_key or set NDL_API_KEY", file=sys.stderr)
         return 2
 
@@ -295,75 +439,137 @@ def _main_impl(args: argparse.Namespace) -> int:
     out_root = Path(args.out_dir).expanduser().resolve()
     universe_dir = out_root / "universe"
     tickers_csv = universe_dir / f"{args.market}_tickers.csv"
+    market_last_trading_date = _market_instruments_max_end(inst_path) or old_last_trading_date
+    price_delta_start = _earliest_date(old_last_trading_date, market_last_trading_date)
     n_tickers = _write_tickers_csv_from_instruments(inst_path, tickers_csv, args.max_tickers)
-    print(f"market={args.market} tickers={n_tickers} old_last_trading_date={old_last_trading_date}")
+    print(
+        f"market={args.market} tickers={n_tickers} "
+        f"old_last_trading_date={old_last_trading_date} "
+        f"market_last_trading_date={market_last_trading_date} "
+        f"price_delta_start={price_delta_start}"
+    )
     tickers = pd.read_csv(tickers_csv)["ticker"].astype(str).str.upper().tolist()
+    active_tickers = _active_market_tickers(inst_path, market_last_trading_date)
+    if args.max_tickers is not None:
+        active_tickers = [t for t in tickers if t in set(active_tickers)]
 
-    etf_txt = Path("/workspace/qlib/_sfp_benchmark_tickers.txt")
+    etf_txt = _resolve_benchmark_tickers_file(args.benchmark_tickers_file)
     etf_lines = etf_txt.read_text(encoding="utf-8").splitlines() if etf_txt.exists() else []
+    etf_tickers = _benchmark_tickers_from_lines(etf_lines)
+    if not etf_tickers:
+        print(f"warning: benchmark tickers file missing or empty: {etf_txt}", file=sys.stderr)
+        if args.fail_on_update_gaps:
+            print("ERROR: benchmark ticker list is required with --fail_on_update_gaps", file=sys.stderr)
+            return 3
     etf_csv = universe_dir / "_sfp_benchmark_tickers.csv"
     _write_tickers_csv_from_lines(etf_lines, etf_csv)
-
-    SharadarCollector = _load_sharadar_collector()
-    collector = SharadarCollector(api_key=api_key, out_dir=str(out_root))
 
     raw_sep_dir = out_root / "raw" / "sep"
     raw_sf2_dir = out_root / "raw" / "sf2"
     raw_sf3a_dir = out_root / "raw" / "sf3a"
     raw_sfp_dir = out_root / "raw" / "sfp"
 
-    collector.update_sep(
-        tickers_file=str(tickers_csv),
-        sep_dir=str(raw_sep_dir),
-        days_back=int(args.days_back_sep),
-    )
-    collector.update_sfp(
-        tickers_file=str(etf_csv),
-        sfp_dir=str(raw_sfp_dir),
-        days_back=int(args.days_back_sfp),
-    )
-    collector.update_table_for_tickers(
-        "SF2",
-        tickers_file=str(tickers_csv),
-        out_dir=str(raw_sf2_dir),
-        date_field="filingdate",
-        days_back=int(args.days_back_sf2),
-        fallback_start="2016-01-01",
-        max_tickers=args.max_tickers,
-    )
-    collector.update_table_for_tickers(
-        "SF3A",
-        tickers_file=str(tickers_csv),
-        out_dir=str(raw_sf3a_dir),
-        date_field="calendardate",
-        days_back=int(args.days_back_sf3a),
-        fallback_start="2016-01-01",
-        max_tickers=args.max_tickers,
-    )
+    update_reports: Dict[str, Dict] = {}
+
+    if args.reuse_raw:
+        print("reuse_raw=1: skipping Sharadar API downloads and using existing raw files")
+        update_reports["SEP"] = _reuse_raw_report(raw_sep_dir, tickers, "date")
+        update_reports["SFP"] = _reuse_raw_report(raw_sfp_dir, etf_tickers, "date")
+        update_reports["SF2"] = _reuse_raw_report(raw_sf2_dir, tickers, "filingdate")
+        update_reports["SF3A"] = _reuse_raw_report(raw_sf3a_dir, tickers, "calendardate")
+    else:
+        SharadarCollector = _load_sharadar_collector()
+        collector = SharadarCollector(api_key=api_key, out_dir=str(out_root))
+
+        update_reports["SEP"] = collector.update_sep(
+            tickers_file=str(tickers_csv),
+            sep_dir=str(raw_sep_dir),
+            days_back=int(args.days_back_sep),
+            return_report=True,
+        )
+        update_reports["SFP"] = collector.update_sfp(
+            tickers_file=str(etf_csv),
+            sfp_dir=str(raw_sfp_dir),
+            days_back=int(args.days_back_sfp),
+            return_report=True,
+        )
+        update_reports["SF2"] = collector.update_table_for_tickers(
+            "SF2",
+            tickers_file=str(tickers_csv),
+            out_dir=str(raw_sf2_dir),
+            date_field="filingdate",
+            days_back=int(args.days_back_sf2),
+            fallback_start="2016-01-01",
+            max_tickers=args.max_tickers,
+            return_report=True,
+        )
+        update_reports["SF3A"] = collector.update_table_for_tickers(
+            "SF3A",
+            tickers_file=str(tickers_csv),
+            out_dir=str(raw_sf3a_dir),
+            date_field="calendardate",
+            days_back=int(args.days_back_sf3a),
+            fallback_start="2016-01-01",
+            max_tickers=args.max_tickers,
+            return_report=True,
+        )
+
+    if args.fail_on_update_gaps:
+        failed_tables = {name: _failure_count(report) for name, report in update_reports.items()}
+        failed_tables = {name: count for name, count in failed_tables.items() if count > int(args.max_update_failures)}
+        if failed_tables:
+            print(
+                "ERROR: update failures exceed threshold: "
+                + ", ".join([f"{name}={count}" for name, count in sorted(failed_tables.items())])
+                + f" allowed_per_table={int(args.max_update_failures)}",
+                file=sys.stderr,
+            )
+            return 3
 
     new_end = _detect_new_end_from_sep(raw_sep_dir, tickers)
     if not new_end:
         print(f"ERROR: failed to detect new end date from SEP under {raw_sep_dir}", file=sys.stderr)
         return 2
     print(f"detected_new_end={new_end}")
+    if args.fail_on_update_gaps:
+        coverage_tickers = active_tickers or tickers
+        sep_gaps = _sep_coverage_gaps(
+            raw_sep_dir,
+            coverage_tickers,
+            required_end=new_end,
+            max_lag_days=int(args.max_sep_lag_days),
+        )
+        if len(sep_gaps) > int(args.max_sep_coverage_gaps):
+            sample = ", ".join([f"{k}->{v}" for k, v in list(sorted(sep_gaps.items()))[:10]])
+            print(
+                "ERROR: SEP coverage gaps exceed threshold: "
+                f"gaps={len(sep_gaps)} allowed={int(args.max_sep_coverage_gaps)} "
+                f"required_end={new_end} sample={sample}",
+                file=sys.stderr,
+            )
+            return 3
 
     stamp = pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M%S")
+    report_path = _write_update_report(out_root, stamp, update_reports)
+    print(f"update_report={report_path}")
+    repo_root = Path(__file__).resolve().parents[1]
     prep_sf2_dir = out_root / "prepared" / f"sf2_features_warmup_{stamp}"
     prep_sf3a_dir = out_root / "prepared" / f"sf3a_features_warmup_{stamp}"
     delta_dir = out_root / "prepared" / f"qlib_delta_{stamp}"
     delta_dir.mkdir(parents=True, exist_ok=True)
 
-    warmup_sf2_start = (pd.Timestamp(old_last_trading_date) - pd.Timedelta(days=int(args.warmup_sf2_days))).strftime(
+    warmup_anchor = price_delta_start or old_last_trading_date
+    warmup_sf2_start = (pd.Timestamp(warmup_anchor) - pd.Timedelta(days=int(args.warmup_sf2_days))).strftime(
         "%Y-%m-%d"
     )
-    warmup_sf3a_start = (pd.Timestamp(old_last_trading_date) - pd.Timedelta(days=int(args.warmup_sf3a_days))).strftime(
+    warmup_sf3a_start = (pd.Timestamp(warmup_anchor) - pd.Timedelta(days=int(args.warmup_sf3a_days))).strftime(
         "%Y-%m-%d"
     )
 
     _run(
         [
             sys.executable,
-            "scripts/data_collector/sharadar/prepare_event_features.py",
+            str(repo_root / "scripts" / "data_collector" / "sharadar" / "prepare_event_features.py"),
             "--input",
             str(raw_sf2_dir),
             "--out_dir",
@@ -393,7 +599,7 @@ def _main_impl(args: argparse.Namespace) -> int:
     _run(
         [
             sys.executable,
-            "scripts/data_collector/sharadar/prepare_event_features.py",
+            str(repo_root / "scripts" / "data_collector" / "sharadar" / "prepare_event_features.py"),
             "--input",
             str(raw_sf3a_dir),
             "--out_dir",
@@ -410,6 +616,8 @@ def _main_impl(args: argparse.Namespace) -> int:
             "snapshot",
             "--prefix",
             "inst13f",
+            "--availability_lag_days",
+            str(int(args.sf3a_availability_lag_days)),
             "--start",
             warmup_sf3a_start,
             "--resample_start",
@@ -420,12 +628,45 @@ def _main_impl(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
     )
 
+    if args.fail_on_update_gaps and not args.dry_run:
+        sf2_missing = _feature_missing_ratio(prep_sf2_dir, tickers)
+        sf3a_missing = _feature_missing_ratio(prep_sf3a_dir, tickers)
+        if sf2_missing > float(args.max_missing_sf2_feature_ratio):
+            print(
+                "ERROR: missing SF2 feature files exceed threshold: "
+                f"{sf2_missing:.2%} > {float(args.max_missing_sf2_feature_ratio):.2%}",
+                file=sys.stderr,
+            )
+            return 3
+        if sf3a_missing > float(args.max_missing_sf3a_feature_ratio):
+            print(
+                "ERROR: missing SF3A feature files exceed threshold: "
+                f"{sf3a_missing:.2%} > {float(args.max_missing_sf3a_feature_ratio):.2%}",
+                file=sys.stderr,
+            )
+            return 3
+
+        sfp_gaps = _sep_coverage_gaps(
+            raw_sfp_dir,
+            etf_tickers,
+            required_end=new_end,
+            max_lag_days=int(args.max_sfp_lag_days),
+        )
+        if len(sfp_gaps) > int(args.max_sfp_coverage_gaps):
+            sample = ", ".join([f"{k}->{v}" for k, v in list(sorted(sfp_gaps.items()))[:10]])
+            print(
+                "ERROR: SFP benchmark coverage gaps exceed threshold: "
+                f"gaps={len(sfp_gaps)} allowed={int(args.max_sfp_coverage_gaps)} sample={sample}",
+                file=sys.stderr,
+            )
+            return 3
+
     written = 0
     for t in tickers:
         raw_sep_file = raw_sep_dir / f"{t}.csv"
         if not raw_sep_file.exists():
             continue
-        df_price = _prepare_price_delta(raw_sep_file, old_last_trading_date)
+        df_price = _prepare_price_delta(raw_sep_file, price_delta_start or old_last_trading_date)
         if df_price.empty:
             continue
         dates = df_price["date"].astype(str).tolist()
@@ -450,12 +691,15 @@ def _main_impl(args: argparse.Namespace) -> int:
 
     if written == 0:
         print("No delta files produced (no new trading dates); skipping dump_update.")
+        if args.fail_on_update_gaps:
+            print("ERROR: no delta files produced while --fail_on_update_gaps is enabled", file=sys.stderr)
+            return 3
     else:
         print(f"delta_files_written={written} delta_dir={delta_dir}")
         _run(
             [
                 sys.executable,
-                "scripts/dump_bin.py",
+                str(repo_root / "scripts" / "dump_bin.py"),
                 "dump_update",
                 "--data_path",
                 str(delta_dir),
@@ -475,8 +719,41 @@ def _main_impl(args: argparse.Namespace) -> int:
             dry_run=args.dry_run,
         )
 
-    if etf_lines:
-        bench = _build_bench_etf_basket(raw_sfp_dir, [x.strip().upper() for x in etf_lines if x.strip()])
+    if etf_tickers:
+        sfp_delta_dir = out_root / "prepared" / f"qlib_sfp_benchmark_{stamp}"
+        sfp_written = _write_sfp_qlib_files(raw_sfp_dir, etf_tickers, sfp_delta_dir)
+        print(f"sfp_benchmark_files_written={sfp_written} sfp_delta_dir={sfp_delta_dir}")
+        if sfp_written == 0:
+            if args.fail_on_update_gaps:
+                print("ERROR: no SFP benchmark files prepared while --fail_on_update_gaps is enabled", file=sys.stderr)
+                return 3
+        else:
+            _run(
+                [
+                    sys.executable,
+                    str(repo_root / "scripts" / "dump_bin.py"),
+                    "dump_update",
+                    "--data_path",
+                    str(sfp_delta_dir),
+                    "--qlib_dir",
+                    str(provider),
+                    "--freq",
+                    "day",
+                    "--date_field_name",
+                    "date",
+                    "--symbol_field_name",
+                    "symbol",
+                    "--file_suffix",
+                    ".csv",
+                    "--exclude_fields",
+                    "symbol",
+                    "--max_workers",
+                    "8",
+                ],
+                dry_run=args.dry_run,
+            )
+
+        bench = _build_bench_etf_basket(raw_sfp_dir, etf_tickers)
         out_bench = provider / "bench_etf_basket.pkl"
         print(f"bench_etf_basket: start={bench.index.min().date()} end={bench.index.max().date()} rows={len(bench)}")
         if not args.dry_run:
@@ -486,29 +763,76 @@ def _main_impl(args: argparse.Namespace) -> int:
     new_last_trading_date = _read_last_line(cal_path)
     print(f"calendar_updated: {old_last_trading_date} -> {new_last_trading_date}")
     if not args.dry_run and new_last_trading_date:
-        if new_last_trading_date != old_last_trading_date:
-            n_ext = _extend_market_instruments(inst_path, old_last_trading_date, new_last_trading_date)
+        current_market_end = _market_instruments_max_end(inst_path)
+        if new_last_trading_date != current_market_end:
+            n_ext = _extend_market_instruments(inst_path, current_market_end, new_last_trading_date)
             print(f"market_instruments_extended: file={inst_path} rows_updated={n_ext}")
         fixes = _clamp_market_instruments_to_sep(inst_path, sep_dir=raw_sep_dir, calendar_end=new_last_trading_date)
         if fixes:
             items = ", ".join([f"{k}->{v}" for k, v in sorted(fixes.items())])
             print(f"market_instruments_clamped_to_sep: {items}")
+        if args.fail_on_update_gaps and len(fixes) > int(args.max_clamped_symbols):
+            print(
+                "ERROR: clamped instruments exceed threshold: "
+                f"clamped={len(fixes)} allowed={int(args.max_clamped_symbols)}",
+                file=sys.stderr,
+            )
+            return 4
     return 0
 
 
 def main() -> int:
     p = argparse.ArgumentParser(description="Catch up US Sharadar Qlib dataset via Nasdaq Data Link API.")
-    p.add_argument("--provider_uri", default="/root/.qlib/qlib_data/us_data")
+    p.add_argument("--provider_uri", default=os.getenv("QLIB_PROVIDER_URI", "/root/.qlib/qlib_data/us_data"))
     p.add_argument("--market", default="pit_mrq_large_idx")
     p.add_argument("--api_key", default="", help="Optional; defaults to env NDL_API_KEY")
     p.add_argument("--out_dir", default="~/.qlib/sharadar")
+    p.add_argument(
+        "--benchmark_tickers_file",
+        default="",
+        help="Benchmark ETF ticker list. Defaults to repo _sfp_benchmark_tickers.txt.",
+    )
     p.add_argument("--max_tickers", type=int, default=None, help="For smoke runs only")
     p.add_argument("--days_back_sep", type=int, default=10)
     p.add_argument("--days_back_sfp", type=int, default=10)
     p.add_argument("--days_back_sf2", type=int, default=60)
     p.add_argument("--days_back_sf3a", type=int, default=400)
+    p.add_argument(
+        "--reuse_raw",
+        action="store_true",
+        help="Skip API downloads and continue from existing raw files under --out_dir.",
+    )
     p.add_argument("--warmup_sf2_days", type=int, default=70)
     p.add_argument("--warmup_sf3a_days", type=int, default=420)
+    p.add_argument(
+        "--sf3a_availability_lag_days",
+        type=int,
+        default=45,
+        help="Calendar-day lag applied to SF3A calendardate before daily snapshot features are built.",
+    )
+    p.add_argument(
+        "--fail_on_update_gaps",
+        action="store_true",
+        help="Return non-zero if SEP coverage, delta output, or instrument clamping exceed thresholds.",
+    )
+    p.add_argument("--max_update_failures", type=int, default=0, help="Allowed per-table collector failures")
+    p.add_argument("--max_sep_lag_days", type=int, default=0, help="Allowed SEP lag in calendar days for active symbols")
+    p.add_argument("--max_sep_coverage_gaps", type=int, default=0, help="Allowed number of active symbols breaching SEP lag")
+    p.add_argument("--max_sfp_lag_days", type=int, default=1, help="Allowed SFP benchmark lag in calendar days")
+    p.add_argument("--max_sfp_coverage_gaps", type=int, default=0, help="Allowed benchmark ETFs breaching SFP lag")
+    p.add_argument(
+        "--max_missing_sf2_feature_ratio",
+        type=float,
+        default=0.25,
+        help="Allowed missing SF2 prepared feature-file ratio when strict update gaps are enabled",
+    )
+    p.add_argument(
+        "--max_missing_sf3a_feature_ratio",
+        type=float,
+        default=0.10,
+        help="Allowed missing SF3A prepared feature-file ratio when strict update gaps are enabled",
+    )
+    p.add_argument("--max_clamped_symbols", type=int, default=0, help="Allowed number of symbols clamped after update")
     p.add_argument("--log_dir", default="~/.qlib/sharadar/logs")
     p.add_argument("--log_file", default="", help="Optional explicit log file path")
     p.add_argument("--dry_run", action="store_true")

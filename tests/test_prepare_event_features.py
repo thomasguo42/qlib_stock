@@ -99,3 +99,50 @@ def test_prepare_event_features_snapshot_mode(tmp_path):
     day3 = out.loc[out["date"] == "2020-01-03"].iloc[0]
     assert abs(float(day3["inst_totalvalue_2d_chg"]) - 30.0) < 1e-6
     assert abs(float(day3["inst_totalvalue_2d_pct"]) - 0.3) < 1e-6
+
+
+def test_prepare_event_features_availability_lag(tmp_path):
+    in_file = tmp_path / "sf3a.csv"
+    out_dir = tmp_path / "out_lag"
+
+    pd.DataFrame(
+        {
+            "ticker": ["AAPL"],
+            "calendardate": ["2020-01-01"],
+            "totalvalue": [100.0],
+        }
+    ).to_csv(in_file, index=False)
+
+    cmd = [
+        sys.executable,
+        str(_script_path()),
+        "--input",
+        str(in_file),
+        "--out_dir",
+        str(out_dir),
+        "--ticker_col",
+        "ticker",
+        "--date_col",
+        "calendardate",
+        "--value_cols",
+        "totalvalue",
+        "--windows",
+        "2",
+        "--prefix",
+        "inst",
+        "--aggregation_mode",
+        "snapshot",
+        "--availability_lag_days",
+        "2",
+        "--start",
+        "2020-01-01",
+        "--resample_end",
+        "2020-01-04",
+    ]
+    subprocess.check_call(cmd)
+
+    out = pd.read_csv(out_dir / "AAPL.csv")
+    day1 = out.loc[out["date"] == "2020-01-01"].iloc[0]
+    day3 = out.loc[out["date"] == "2020-01-03"].iloc[0]
+    assert float(day1["inst_totalvalue_daily"]) == 0.0
+    assert float(day3["inst_totalvalue_daily"]) == 100.0

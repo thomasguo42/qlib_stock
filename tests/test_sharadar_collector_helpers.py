@@ -15,6 +15,7 @@ def _load_module():
 _mod = _load_module()
 _extract_table_names = _mod._extract_table_names
 _parse_key_value_csv = _mod._parse_key_value_csv
+_read_ticker_list = _mod._read_ticker_list
 
 
 def test_parse_key_value_csv():
@@ -37,3 +38,17 @@ def test_extract_table_names():
     assert "SEP" in names
     assert "SF1" in names
     assert "TICKERS" in names
+
+
+def test_read_ticker_list_handles_headerless_files_and_comments(tmp_path: Path):
+    tickers = tmp_path / "tickers.txt"
+    tickers.write_text("# comment\nSH\npsq\nRWM\nSH\n", encoding="utf-8")
+
+    assert _read_ticker_list(tickers) == ["PSQ", "RWM", "SH"]
+
+
+def test_read_ticker_list_handles_csv_header(tmp_path: Path):
+    tickers = tmp_path / "tickers.csv"
+    tickers.write_text("ticker,name\nSH,Short S&P500\nPSQ,Short QQQ\n", encoding="utf-8")
+
+    assert _read_ticker_list(tickers) == ["PSQ", "SH"]

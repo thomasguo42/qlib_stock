@@ -7,9 +7,9 @@ except ModuleNotFoundError:
     print("ModuleNotFoundError. CatBoostModel are skipped. (optional: maybe installing CatBoostModel can fix it.)")
 try:
     from .double_ensemble import DEnsembleModel
-    from .gbdt import LGBModel
+    from .gbdt import LGBModel, LGBRankerModel
 except ModuleNotFoundError:
-    DEnsembleModel, LGBModel = None, None
+    DEnsembleModel, LGBModel, LGBRankerModel = None, None, None
     print(
         "ModuleNotFoundError. DEnsembleModel and LGBModel are skipped. (optional: maybe installing lightgbm can fix it.)"
     )
@@ -23,6 +23,11 @@ try:
 except ModuleNotFoundError:
     LinearModel = None
     print("ModuleNotFoundError. LinearModel is skipped(optional: maybe installing scipy and sklearn can fix it).")
+try:
+    from .score import FeatureWeightedScoreModel, ICSelectedScoreModel, RegimeSleeveScoreModel
+except ModuleNotFoundError:
+    FeatureWeightedScoreModel, ICSelectedScoreModel, RegimeSleeveScoreModel = None, None, None
+    print("ModuleNotFoundError. Score models are skipped.")
 # import pytorch models
 try:
     from .pytorch_alstm import ALSTM
@@ -40,4 +45,11 @@ except ModuleNotFoundError:
     pytorch_classes = ()
     print("ModuleNotFoundError.  PyTorch models are skipped (optional: maybe installing pytorch can fix it).")
 
-all_model_classes = (CatBoostModel, DEnsembleModel, LGBModel, XGBModel, LinearModel) + pytorch_classes
+all_model_classes = (
+    CatBoostModel,
+    DEnsembleModel,
+    LGBModel,
+    LGBRankerModel,
+    XGBModel,
+    LinearModel,
+) + pytorch_classes

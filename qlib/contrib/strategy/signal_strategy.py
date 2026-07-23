@@ -1,12 +1,14 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
-import os
 import copy
+import os
 import warnings
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Text, Tuple, Union
+
 import numpy as np
 import pandas as pd
 
-from typing import Dict, List, Text, Tuple, Union
 from abc import ABC
 
 from qlib.data import D
@@ -88,6 +90,13 @@ class TopkDropoutStrategy(BaseSignalStrategy):
         hold_thresh=1,
         only_tradable=False,
         forbid_all_trade_at_limit=True,
+        sector_map_csv: Optional[str] = None,
+        sector_ticker_col: str = "ticker",
+        sector_col: str = "sector",
+        max_sector_count: Optional[int] = None,
+        max_sector_weight: Optional[float] = None,
+        feature_score_weights: Optional[Dict[str, float]] = None,
+        feature_min_percentiles: Optional[Dict[str, float]] = None,
         **kwargs,
     ):
         """
@@ -134,6 +143,224 @@ class TopkDropoutStrategy(BaseSignalStrategy):
         self.hold_thresh = hold_thresh
         self.only_tradable = only_tradable
         self.forbid_all_trade_at_limit = forbid_all_trade_at_limit
+        self.sector_map_csv = sector_map_csv
+        self.sector_ticker_col = sector_ticker_col
+        self.sector_col = sector_col
+        if max_sector_count is None and max_sector_weight is not None:
+            max_sector_count = int(np.floor(float(max_sector_weight) * int(topk)))
+        self.max_sector_count = None if max_sector_count is None else max(1, int(max_sector_count))
+        self._sector_map = None
+        self.feature_score_weights = self._normalize_feature_control_map(feature_score_weights)
+        self.feature_min_percentiles = self._normalize_feature_control_map(
+            feature_min_percentiles, lower=0.0, upper=1.0
+        )
+        self._feature_control_cache: Dict[Tuple[str, ...], Dict[str, Any]] = {}
+
+    @staticmethod
+    def _normalize_feature_control_map(
+        values: Optional[Dict[str, Any]], *, lower: Optional[float] = None, upper: Optional[float] = None
+    ) -> Dict[str, float]:
+        if not values:
+            return {}
+        if not isinstance(values, dict):
+            raise TypeError("feature controls must be a mapping from qlib feature expression to numeric value")
+        out: Dict[str, float] = {}
+        for field, raw in values.items():
+            name = str(field).strip()
+            if not name:
+                continue
+            value = float(raw)
+            if not np.isfinite(value):
+                continue
+            if lower is not None:
+                value = max(float(lower), value)
+            if upper is not None:
+                value = min(float(upper), value)
+            out[name] = value
+        return out
+
+    @staticmethod
+    def _cs_zscore(values: pd.Series) -> pd.Series:
+        numeric = pd.to_numeric(values, errors="coerce")
+        std = float(numeric.std(ddof=0))
+        if not np.isfinite(std) or std <= 1e-12:
+            return pd.Series(0.0, index=values.index, dtype=float)
+        mean = float(numeric.mean())
+        return ((numeric - mean) / std).fillna(0.0).astype(float)
+
+    @staticmethod
+    def _demote_masked_scores(scores: pd.Series, mask: pd.Series) -> pd.Series:
+        if scores.empty:
+            return scores
+        adjusted = scores.copy()
+        mask = mask.reindex(adjusted.index).fillna(False).astype(bool)
+        if not bool(mask.any()):
+            return adjusted
+        finite_scores = adjusted.replace([np.inf, -np.inf], np.nan).dropna()
+        if finite_scores.empty:
+            return adjusted
+        spread = float(finite_scores.max() - finite_scores.min())
+        if not np.isfinite(spread):
+            spread = 1.0
+        floor = float(finite_scores.min() - max(1.0, spread))
+        step = max(1e-9, max(1.0, spread) * 1e-9)
+        for inst in adjusted.index[mask.to_numpy()]:
+            adjusted.loc[inst] = floor
+            floor -= step
+        return adjusted
+
+    @staticmethod
+    def _feature_frame_by_instrument(features, fields: List[str], instruments: List[str]) -> pd.DataFrame:
+        if features is None:
+            return pd.DataFrame(index=pd.Index(instruments))
+        if isinstance(features, pd.Series):
+            features = features.to_frame(fields[0] if len(fields) == 1 else "feature")
+        if not isinstance(features, pd.DataFrame) or features.empty:
+            return pd.DataFrame(index=pd.Index(instruments))
+        frame = features.copy()
+        if len(fields) == 1 and fields[0] not in frame.columns and frame.shape[1] == 1:
+            frame = frame.rename(columns={frame.columns[0]: fields[0]})
+        cols = [field for field in fields if field in frame.columns]
+        if not cols:
+            return pd.DataFrame(index=pd.Index(instruments))
+        frame = frame[cols]
+        if isinstance(frame.index, pd.MultiIndex):
+            level = "instrument" if "instrument" in frame.index.names else frame.index.nlevels - 1
+            frame = frame.groupby(level=level).last()
+        frame.index = frame.index.astype(str)
+        return frame.reindex([str(inst) for inst in instruments])
+
+    @staticmethod
+    def _feature_panel(features, fields: List[str]) -> pd.DataFrame:
+        if features is None:
+            return pd.DataFrame()
+        if isinstance(features, pd.Series):
+            features = features.to_frame(fields[0] if len(fields) == 1 else "feature")
+        if not isinstance(features, pd.DataFrame) or features.empty:
+            return pd.DataFrame()
+        frame = features.copy()
+        if len(fields) == 1 and fields[0] not in frame.columns and frame.shape[1] == 1:
+            frame = frame.rename(columns={frame.columns[0]: fields[0]})
+        cols = [field for field in fields if field in frame.columns]
+        if not cols:
+            return pd.DataFrame()
+        frame = frame[cols]
+        if isinstance(frame.index, pd.MultiIndex) and list(frame.index.names) == ["instrument", "datetime"]:
+            frame = frame.reorder_levels(["datetime", "instrument"]).sort_index()
+        return frame.sort_index()
+
+    def _load_feature_controls(
+        self, instruments: List[str], start_time, end_time, fields: List[str]
+    ) -> pd.DataFrame:
+        if not instruments or not fields:
+            return pd.DataFrame(index=pd.Index(instruments))
+        key = tuple(fields)
+        cache = self._feature_control_cache.setdefault(
+            key,
+            {"frame": pd.DataFrame(), "instruments": set(), "start_time": None, "end_time": None},
+        )
+        requested = [str(inst) for inst in instruments]
+        missing = [inst for inst in requested if inst not in cache["instruments"]]
+        if missing:
+            cal = getattr(self.trade_calendar, "_calendar", None)
+            if cal is not None and len(cal) > 0:
+                cache_start, cache_end = pd.Timestamp(cal[0]), pd.Timestamp(cal[-1])
+            else:
+                cache_start, cache_end = pd.Timestamp(start_time), pd.Timestamp(end_time)
+            data = D.features(missing, fields, start_time=cache_start, end_time=cache_end)
+            panel = self._feature_panel(data, fields)
+            if cache["frame"].empty:
+                cache["frame"] = panel
+            elif not panel.empty:
+                cache["frame"] = pd.concat([cache["frame"], panel]).sort_index()
+            cache["instruments"].update(missing)
+            cache["start_time"] = cache_start
+            cache["end_time"] = cache_end
+        frame = cache["frame"]
+        if frame.empty:
+            return pd.DataFrame(index=pd.Index(requested))
+        if isinstance(frame.index, pd.MultiIndex) and "datetime" in frame.index.names:
+            dt = pd.DatetimeIndex(frame.index.get_level_values("datetime"))
+            frame = frame[(dt >= pd.Timestamp(start_time)) & (dt <= pd.Timestamp(end_time))]
+        return self._feature_frame_by_instrument(frame, fields, requested)
+
+    def _apply_feature_score_controls(self, pred_score: pd.Series, pred_start_time, pred_end_time) -> pd.Series:
+        if (
+            pred_score is None
+            or pred_score.empty
+            or (not self.feature_score_weights and not self.feature_min_percentiles)
+        ):
+            return pred_score
+        fields = list(dict.fromkeys([*self.feature_score_weights.keys(), *self.feature_min_percentiles.keys()]))
+        instruments = [str(inst) for inst in pred_score.index]
+        features = self._load_feature_controls(instruments, pred_start_time, pred_end_time, fields)
+        if features.empty:
+            return pred_score
+
+        base = pd.to_numeric(pred_score, errors="coerce")
+        adjusted = self._cs_zscore(base) if self.feature_score_weights else base.astype(float).copy()
+        for field, weight in self.feature_score_weights.items():
+            if field not in features.columns:
+                continue
+            feature = pd.to_numeric(features[field], errors="coerce").reindex(instruments)
+            adjusted = adjusted + float(weight) * self._cs_zscore(feature).reindex(adjusted.index).fillna(0.0)
+
+        for field, min_pct in self.feature_min_percentiles.items():
+            if field not in features.columns:
+                continue
+            feature = pd.to_numeric(features[field], errors="coerce").reindex(instruments)
+            pct = feature.rank(pct=True)
+            adjusted = self._demote_masked_scores(adjusted, pct.isna() | (pct < float(min_pct)))
+        return adjusted.where(base.notna(), np.nan).reindex(pred_score.index)
+
+    def _load_sector_map(self) -> Dict[str, str]:
+        if self._sector_map is not None:
+            return self._sector_map
+        if not self.sector_map_csv:
+            self._sector_map = {}
+            return self._sector_map
+        path = Path(self.sector_map_csv).expanduser()
+        if not path.exists():
+            self._sector_map = {}
+            return self._sector_map
+        df = pd.read_csv(path, usecols=lambda c: c in {self.sector_ticker_col, self.sector_col}, low_memory=False)
+        if self.sector_ticker_col not in df.columns or self.sector_col not in df.columns:
+            self._sector_map = {}
+            return self._sector_map
+        tickers = df[self.sector_ticker_col].astype(str).str.upper().str.strip()
+        sectors = df[self.sector_col].astype(str).str.strip()
+        sectors = sectors.mask(sectors.eq("") | sectors.str.lower().isin({"nan", "none"}), "__UNKNOWN__")
+        sector_map = pd.Series(sectors.values, index=tickers.values)
+        sector_map = sector_map[~sector_map.index.duplicated(keep="last")]
+        self._sector_map = sector_map.to_dict()
+        return self._sector_map
+
+    def _apply_sector_cap(self, pred_score: pd.Series) -> pd.Series:
+        if self.max_sector_count is None or self.max_sector_count <= 0 or pred_score is None or pred_score.empty:
+            return pred_score
+        sector_map = self._load_sector_map()
+        if not sector_map:
+            return pred_score
+
+        sorted_score = pred_score.dropna().sort_values(ascending=False)
+        if sorted_score.empty:
+            return pred_score
+        spread = float(sorted_score.max() - sorted_score.min())
+        if not np.isfinite(spread):
+            spread = 1.0
+        floor = float(sorted_score.min() - max(1.0, spread))
+        step = max(1e-9, max(1.0, spread) * 1e-9)
+        counts: Dict[str, int] = {}
+        adjusted = sorted_score.copy()
+        for inst in sorted_score.index:
+            sector = sector_map.get(str(inst).upper().strip(), "__UNKNOWN__")
+            count = counts.get(sector, 0)
+            if count < self.max_sector_count:
+                counts[sector] = count + 1
+                continue
+            adjusted.loc[inst] = floor
+            floor -= step
+        return adjusted.reindex(pred_score.index)
 
     def generate_trade_decision(self, execute_result=None):
         # get the number of trading step finished, trade_step can be [0, 1, 2, ..., trade_len - 1]
@@ -147,6 +374,8 @@ class TopkDropoutStrategy(BaseSignalStrategy):
             pred_score = pred_score.iloc[:, 0]
         if pred_score is None:
             return TradeDecisionWO([], self)
+        pred_score = self._apply_feature_score_controls(pred_score, pred_start_time, pred_end_time)
+        pred_score = self._apply_sector_cap(pred_score)
         if self.only_tradable:
             # If The strategy only consider tradable stock when make decision
             # It needs following actions to filter stocks
@@ -427,6 +656,8 @@ class EnhancedIndexingStrategy(WeightStrategyBase):
         self.specific_risk_path = name_mapping.get("specific_risk", self.SPECIFIC_RISK_NAME)
         self.blacklist_path = name_mapping.get("blacklist", self.BLACKLIST_NAME)
 
+        if EnhancedIndexingOptimizer is None:
+            raise ImportError("EnhancedIndexingOptimizer is unavailable; install a compatible cvxpy/numpy stack")
         self.optimizer = EnhancedIndexingOptimizer(**optimizer_kwargs)
 
         self.verbose = verbose

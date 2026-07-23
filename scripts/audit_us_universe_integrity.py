@@ -156,7 +156,11 @@ def main() -> int:
     overlap_fail = False
 
     for ref_market in _parse_csv(args.reference_markets):
-        ref_syms = _load_market_symbols(ref_market, start, end)
+        try:
+            ref_syms = _load_market_symbols(ref_market, start, end)
+        except (FileNotFoundError, ValueError) as e:
+            print(f"- warning: reference market missing or unreadable: {ref_market} ({e})")
+            continue
         ref_n = len(ref_syms)
         ov = len(base_symbols & ref_syms)
         cov = float(ov) / float(ref_n) if ref_n > 0 else 0.0

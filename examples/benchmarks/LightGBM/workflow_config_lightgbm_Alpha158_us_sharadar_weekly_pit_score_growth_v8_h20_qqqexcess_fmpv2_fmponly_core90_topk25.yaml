@@ -1,0 +1,210 @@
+qlib_init:
+  provider_uri: /root/.qlib/qlib_data/us_data
+  region: us
+  custom_ops:
+  - class: IsNull
+    module_path: qlib.contrib.ops.high_freq
+  exp_manager:
+    class: MLflowExpManager
+    module_path: qlib.workflow.expm
+    kwargs:
+      uri: /workspace/qlib/mlruns
+      default_exp_name: us_sharadar_weekly_pit_score_growth_v8_h20_qqqexcess_fmpv2_fmponly_core90_topk25
+market: pit_mrq_large_idx
+benchmark: AAPL
+data_handler_config: &id001
+  start_time: '2022-01-01'
+  end_time: '2026-04-30'
+  fit_start_time: '2022-01-03'
+  fit_end_time: '2023-07-31'
+  instruments: pit_mrq_large_idx
+  freq: day
+  infer_processors:
+  - class: SelectiveCSZScoreNorm
+    module_path: qlib.contrib.data.processor
+    kwargs:
+      fields_group: feature
+      method: robust
+      exclude_prefixes:
+      - MKT_
+  learn_processors:
+  - class: DropnaLabel
+  - class: BenchmarkExcessLabel
+    module_path: qlib.contrib.data.processor
+    kwargs:
+      benchmark_pkl: /root/.qlib/qlib_data/us_data/bench_qqq.pkl
+      benchmark_kind: return
+      label_horizon_days: 20
+      label_ref_start_days: 1
+  filter_pipe:
+  - filter_type: ExpressionDFilter
+    rule_expression: $close > 5
+    filter_start_time: 2016-01-01
+    filter_end_time: 2026-04-30
+    keep: false
+  - filter_type: ExpressionDFilter
+    rule_expression: Mean($close * $volume, 20) > 10000000
+    filter_start_time: 2016-01-01
+    filter_end_time: 2026-04-30
+    keep: false
+  label:
+  - - Ref($close, -21)/Ref($close, -1) - 1
+  - - LABEL0
+  pit_fields: []
+  pit_interval: q
+  extra_fields:
+  - $mkt_qqq_ret_63d_lag1
+  - $fmp_eps_surprise_pct_latest
+  - $fmp_eps_surprise_pct_63d_event_mean
+  - $fmp_rev_surprise_pct_latest
+  - $fmp_grade_new_score_latest
+  - $fmp_rating_bullish_ratio_snapshot
+  - $fmp_rating_bearish_ratio_snapshot
+  - $fmp_rating_net_bullish_snapshot
+  - $fmp_rating_net_bullish_63d_chg
+  - $fmp_earn_count_20d_freshness
+  - $fmp_grade_count_20d_freshness
+  - $fmp_alpha_earn_surprise_latest
+  - $fmp_alpha_earn_surprise_10d
+  - $fmp_alpha_earn_surprise_20d
+  - $fmp_alpha_earn_surprise_63d
+  - $fmp_alpha_rating_bullish
+  - $fmp_alpha_rating_bearish_penalty
+  - $fmp_alpha_rating_net_change
+  - $fmp_alpha_grade_score_latest
+  - $fmp_alpha_grade_revision_10d
+  - $fmp_alpha_grade_revision_20d
+  - $fmp_alpha_grade_revision_63d
+  - $fmp_alpha_pt_upside_latest
+  - $fmp_alpha_pt_upside_20d
+  - $fmp_alpha_event_freshness
+  - $fmp_alpha_event_coverage
+  - $fmp_alpha_event_composite
+  extra_names:
+  - MKT_QQQ_RET_63D_LAG1
+  - FMP_EPS_SURPRISE_PCT_LATEST
+  - FMP_EPS_SURPRISE_PCT_63D_EVENT_MEAN
+  - FMP_REV_SURPRISE_PCT_LATEST
+  - FMP_GRADE_NEW_SCORE_LATEST
+  - FMP_RATING_BULLISH_RATIO_SNAPSHOT
+  - FMP_RATING_BEARISH_RATIO_SNAPSHOT
+  - FMP_RATING_NET_BULLISH_SNAPSHOT
+  - FMP_RATING_NET_BULLISH_63D_CHG
+  - FMP_EARN_COUNT_20D_FRESHNESS
+  - FMP_GRADE_COUNT_20D_FRESHNESS
+  - FMP_ALPHA_EARN_SURPRISE_LATEST
+  - FMP_ALPHA_EARN_SURPRISE_10D
+  - FMP_ALPHA_EARN_SURPRISE_20D
+  - FMP_ALPHA_EARN_SURPRISE_63D
+  - FMP_ALPHA_RATING_BULLISH
+  - FMP_ALPHA_RATING_BEARISH_PENALTY
+  - FMP_ALPHA_RATING_NET_CHANGE
+  - FMP_ALPHA_GRADE_SCORE_LATEST
+  - FMP_ALPHA_GRADE_REVISION_10D
+  - FMP_ALPHA_GRADE_REVISION_20D
+  - FMP_ALPHA_GRADE_REVISION_63D
+  - FMP_ALPHA_PT_UPSIDE_LATEST
+  - FMP_ALPHA_PT_UPSIDE_20D
+  - FMP_ALPHA_EVENT_FRESHNESS
+  - FMP_ALPHA_EVENT_COVERAGE
+  - FMP_ALPHA_EVENT_COMPOSITE
+port_analysis_config: &id002
+  strategy:
+    class: WeeklyBenchmarkAwareScoreWeightedStrategy
+    module_path: qlib.contrib.strategy
+    kwargs:
+      topk: 25
+      rebalance_weekday: 0
+      risk_degree: 1.0
+      weighting: rank
+      benchmark_core_weight: 0.9
+      benchmark_topn: 1
+      benchmark_marketcap_field: $marketcap_q
+      max_weight: 0.12
+      max_active_weight: 0.06
+      sector_map_csv: /root/.qlib/sharadar/raw/tickers.csv
+      sector_ticker_col: ticker
+      sector_col: sector
+      liquidity_window: 20
+      liquidity_buffer: 3
+      vol_window: 63
+      vol_scale: false
+      benchmark_tickers:
+      - QQQ
+      benchmark_max_weight: 1.0
+      max_turnover: 0.08
+      min_trade_weight: 0.001
+      min_position_weight: 0.001
+      max_holdings: 45
+      max_sector_weight: 0.35
+      dynamic_alpha_weight: false
+  backtest:
+    start_time: 2022-01-01
+    end_time: 2026-04-30
+    account: 10000000
+    benchmark: AAPL
+    exchange_kwargs:
+      limit_threshold: null
+      deal_price: close
+      open_cost: 0.0005
+      close_cost: 0.0015
+      min_cost: 5
+task:
+  model:
+    class: StackedSignalScoreModel
+    module_path: qlib.contrib.model.score
+    kwargs:
+      sleeves:
+        fmp_event:
+          FMP_ALPHA_EVENT_COMPOSITE: 1.0
+          FMP_ALPHA_EARN_SURPRISE_LATEST: 0.8
+          FMP_ALPHA_EARN_SURPRISE_20D: 0.65
+          FMP_ALPHA_EARN_SURPRISE_63D: 0.35
+          FMP_ALPHA_RATING_BULLISH: 0.7
+          FMP_ALPHA_RATING_BEARISH_PENALTY: 0.7
+          FMP_ALPHA_RATING_NET_CHANGE: 0.45
+          FMP_ALPHA_GRADE_SCORE_LATEST: 0.45
+          FMP_ALPHA_PT_UPSIDE_LATEST: 0.15
+          FMP_ALPHA_EVENT_FRESHNESS: 0.1
+      max_sleeves: 1
+      min_selected_sleeves: 1
+      min_abs_ic: 0.001
+      min_ic_days: 80
+      min_daily_count: 30
+      min_coverage: 0.3
+      min_recent_signed_ic: -0.006
+      min_worst_year_signed_ic: -0.05
+      recent_window_days: 756
+      recent_weight: 0.65
+      weight_power: 1.0
+      normalize_by_date: true
+      normalize_sleeve_scores_by_date: true
+      missing: raise
+      allow_negative_sleeve_weights: true
+      fallback_to_equal: true
+  dataset:
+    class: DatasetH
+    module_path: qlib.data.dataset
+    kwargs:
+      handler:
+        class: SharadarFeatureHandler
+        module_path: qlib.contrib.data.handler_sharadar
+        kwargs: *id001
+      segments:
+        train:
+        - '2022-01-03'
+        - '2023-07-31'
+        valid:
+        - '2023-09-01'
+        - '2023-12-29'
+        test:
+        - '2024-02-01'
+        - '2026-04-30'
+  record:
+  - class: SignalRecord
+    module_path: qlib.workflow.record_temp
+    kwargs: {}
+  - class: PortAnaRecord
+    module_path: qlib.workflow.record_temp
+    kwargs:
+      config: *id002
